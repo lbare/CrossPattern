@@ -15,6 +15,24 @@ export interface Backstitch {
   colorId: number;
 }
 
+/** The pattern exactly as it came out of picture conversion, kept so edits can be compared and undone locally. */
+export interface Converted {
+  width: number;
+  height: number;
+  hexes: string[];
+  /** Index into hexes + 1 per square; 0 is empty. */
+  cells: Uint16Array;
+}
+
+/** Pictures that can be shown over the pattern as a guide while editing. */
+export interface Reference {
+  /** The cropped photo as a data URL. */
+  photo?: string;
+  /** Where the photo sits, in squares. */
+  rect: { x: number; y: number; w: number; h: number };
+  converted?: Converted;
+}
+
 export interface Pattern {
   name: string;
   width: number;
@@ -23,6 +41,7 @@ export interface Pattern {
   cells: Uint16Array;
   palette: PaletteColor[];
   backstitches: Backstitch[];
+  reference?: Reference;
 }
 
 export const MAX_SIZE = 400;
@@ -150,6 +169,26 @@ export function despeckle(cells: Uint16Array, w: number, h: number, level: numbe
   return changed;
 }
 
+/** Local tidy for one square: if it has at most two same-colored neighbours, it takes the most common color around it. */
+export function tidyCell(cells: Uint16Array, w: number, h: number, x: number, y: number): void {
+  const v = cells[y * w + x];
+  const tally = new Map<number, number>();
+  let same = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if ((dx === 0 && dy === 0) || xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      const nv = cells[yy * w + xx];
+      if (nv === v) same++;
+      else tally.set(nv, (tally.get(nv) ?? 0) + 1);
+    }
+  }
+  if (same > 2) return;
+  let best = v, bestN = same;
+  for (const [nv, n] of tally) if (n > bestN) { best = nv; bestN = n; }
+  cells[y * w + x] = best;
+}
+
 /** Merges the least-used colors into their closest remaining color until only `target` are left. */
 export function reduceColors(p: Pattern, target: number): void {
   removeUnused(p);
@@ -201,15 +240,36 @@ export function resized(p: Pattern, width: number, height: number): Pattern {
 
 // ---- Saving and loading -------------------------------------------------
 
-export function serialize(p: Pattern): string {
+function encodeRuns(cells: Uint16Array): number[] {
   const runs: number[] = [];
-  for (let i = 0; i < p.cells.length; ) {
-    const v = p.cells[i];
+  for (let i = 0; i < cells.length; ) {
+    const v = cells[i];
     let j = i + 1;
-    while (j < p.cells.length && p.cells[j] === v) j++;
+    while (j < cells.length && cells[j] === v) j++;
     runs.push(v, j - i);
     i = j;
   }
+  return runs;
+}
+
+function decodeRuns(runs: number[], length: number): Uint16Array {
+  const cells = new Uint16Array(length);
+  let i = 0;
+  for (let r = 0; r + 1 < runs.length; r += 2) {
+    const n = Math.min(runs[r + 1], length - i);
+    cells.fill(runs[r], i, i + n);
+    i += n;
+  }
+  return cells;
+}
+
+export function serialize(p: Pattern, withPhoto = true): string {
+  const ref = p.reference;
+  const reference = ref && {
+    photo: withPhoto ? ref.photo : undefined,
+    rect: ref.rect,
+    converted: ref.converted && { ...ref.converted, cells: encodeRuns(ref.converted.cells) },
+  };
   return JSON.stringify({
     app: 'crosspattern',
     version: 1,
@@ -218,7 +278,8 @@ export function serialize(p: Pattern): string {
     height: p.height,
     palette: p.palette,
     backstitches: p.backstitches,
-    cells: runs,
+    cells: encodeRuns(p.cells),
+    reference,
   });
 }
 
@@ -228,13 +289,7 @@ export function deserialize(text: string): Pattern {
   if (d?.app !== 'crosspattern' || !okSize(d.width) || !okSize(d.height) || !Array.isArray(d.cells)) {
     throw new Error('This is not a CrossPattern file.');
   }
-  const cells = new Uint16Array(d.width * d.height);
-  let i = 0;
-  for (let r = 0; r + 1 < d.cells.length; r += 2) {
-    const n = Math.min(d.cells[r + 1], cells.length - i);
-    cells.fill(d.cells[r], i, i + n);
-    i += n;
-  }
+  const cells = decodeRuns(d.cells, d.width * d.height);
   const palette: PaletteColor[] = (d.palette ?? [])
     .filter((c: PaletteColor) => Number.isInteger(c?.id) && /^#[0-9a-f]{6}$/i.test(c?.hex))
     .map((c: PaletteColor) => ({ id: c.id, hex: c.hex.toLowerCase(), symbol: String(c.symbol ?? '?') }));
@@ -243,5 +298,19 @@ export function deserialize(text: string): Pattern {
   const backstitches: Backstitch[] = (d.backstitches ?? []).filter(
     (b: Backstitch) => ids.has(b?.colorId) && [b.x1, b.y1, b.x2, b.y2].every(Number.isFinite),
   );
-  return { name: String(d.name ?? 'Untitled pattern'), width: d.width, height: d.height, cells, palette, backstitches };
+  let reference: Reference | undefined;
+  const r = d.reference;
+  if (r && [r.rect?.x, r.rect?.y, r.rect?.w, r.rect?.h].every(Number.isFinite)) {
+    const cv = r.converted;
+    const hexOk = (s: unknown) => typeof s === 'string' && /^#[0-9a-f]{6}$/i.test(s);
+    reference = {
+      photo: typeof r.photo === 'string' && r.photo.startsWith('data:image/') ? r.photo : undefined,
+      rect: { x: r.rect.x, y: r.rect.y, w: r.rect.w, h: r.rect.h },
+      converted: cv && okSize(cv.width) && okSize(cv.height) && Array.isArray(cv.hexes) && cv.hexes.every(hexOk) && Array.isArray(cv.cells)
+        ? { width: cv.width, height: cv.height, hexes: cv.hexes, cells: decodeRuns(cv.cells, cv.width * cv.height).map((v) => (v <= cv.hexes.length ? v : 0)) }
+        : undefined,
+    };
+    if (!reference.photo && !reference.converted) reference = undefined;
+  }
+  return { name: String(d.name ?? 'Untitled pattern'), width: d.width, height: d.height, cells, palette, backstitches, reference };
 }

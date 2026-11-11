@@ -8,7 +8,7 @@ import {
 } from './marks';
 import { MAX_SIZE, paletteFromHexes } from './model';
 import { FABRIC } from './render';
-import { setPattern } from './store';
+import { photoDataUrl, setPattern } from './store';
 
 function loadImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -368,6 +368,12 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       cells: result.cells.slice(),
       palette: paletteFromHexes(result.palette),
       backstitches: [],
+      // Kept with the pattern so the editor can show the photo, or this first conversion, as a guide.
+      reference: {
+        photo: img ? photoDataUrl(img, crop.x, crop.y, crop.w, crop.h) : undefined,
+        rect: { x: 0, y: 0, w: result.width, h: result.height },
+        converted: { width: result.width, height: result.height, hexes: result.palette, cells: result.cells.slice() },
+      },
     });
     onClose();
   };

@@ -13,6 +13,9 @@ const ICONS: Record<string, string> = {
   eraser: 'M8.5 16.5l-5-5 8-8 6 6-7 7h-2zM7 8l5.5 5.5M3 17h14',
   fill: 'M4.5 10.5l6-6 5.5 5.5-5 5a1.4 1.4 0 0 1-2 0l-4.5-4.5zM10.5 4.5L8 2M4.5 10.5h11M16.5 13.5s1.5 1.8 1.5 2.8a1.5 1.5 0 0 1-3 0c0-1 1.500-2.8 1.500-2.8z',
   picker: 'M11 6l3 3M12.500 4.500l1.500-1.500a1.400 1.400 0 0 1 2 0l1.500 1.500a1.400 1.400 0 0 1 0 2L16 8M12 7l-8 8-1 3 3-1 8-8',
+  recolor: 'M3 17c2.500 0 4-1 4-3.500L15 5a1.600 1.600 0 0 1 2.300 2.300L9 15c-2.500 0-3.500 1-6 2zM7 13.500l2 1.500',
+  tidy: 'M10 2.500v4M10 13.500v4M2.500 10h4M13.500 10h4M5 5l2.200 2.200M12.800 12.800L15 15M15 5l-2.200 2.200M7.200 12.800L5 15',
+  restore: 'M4.500 10a5.500 5.500 0 1 0 1.800-4.100M4 3.500v3.500h3.500M10 7v3.200l2.200 1.500',
   line: 'M4 16L16 4',
   rect: 'M4 5h12v10H4z',
   select: 'M4 4h3M9 4h3M14 4h2v2M16 8v3M16 13v3h-2M12 16H9M7 16H4v-2M4 12V9M4 7V4',
@@ -34,6 +37,9 @@ function Icon({ name }: { name: string }) {
 const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: 'pencil', label: 'Pencil', key: 'B', hint: 'Click or drag to stitch. Hold Alt to pick up a color.' },
   { id: 'eraser', label: 'Eraser', key: 'E', hint: 'Click or drag to remove stitches.' },
+  { id: 'recolor', label: 'Recolor brush', key: 'C', hint: 'Replaces only the color you start on with the current color, leaving everything else alone.' },
+  { id: 'tidy', label: 'Tidy brush', key: 'T', hint: 'Brush over a noisy patch to absorb stray stitches into the colors around them.' },
+  { id: 'restore', label: 'Restore brush', key: 'O', hint: 'Paints back the stitches from the first conversion. Needs a pattern made from a picture.' },
   { id: 'fill', label: 'Fill', key: 'G', hint: 'Click to fill an area. Shift-click replaces that color everywhere.' },
   { id: 'picker', label: 'Pick color', key: 'I', hint: 'Click a stitch to use its color.' },
   { id: 'line', label: 'Line', key: 'L', hint: 'Drag to draw a straight line of stitches.' },
@@ -60,6 +66,7 @@ export function App() {
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (k === ' ') { keys.space = true; emit(false); e.preventDefault(); return; }
+      if (k === 'p' && !mod) { if (!S.refPeek) { S.refPeek = true; emit(false); } return; }
       if (mod) {
         if (k === 'z') { e.shiftKey ? redo() : undo(); }
         else if (k === 'y') redo();
@@ -85,6 +92,7 @@ export function App() {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === ' ') { keys.space = false; emit(false); }
+      if (e.key.toLowerCase() === 'p' && S.refPeek) { S.refPeek = false; emit(false); }
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKeyUp);
@@ -147,6 +155,13 @@ export function App() {
           <button className={'btn' + (S.showGrid ? ' on' : '')} onClick={() => { S.showGrid = !S.showGrid; emit(false); }}>
             Grid
           </button>
+          <button
+            className={'btn' + (S.mirror ? ' on' : '')}
+            title="Paint both sides at once, mirrored across the centre line"
+            onClick={() => { S.mirror = !S.mirror; emit(false); }}
+          >
+            Mirror
+          </button>
         </div>
       </header>
 
@@ -156,6 +171,7 @@ export function App() {
             <button
               key={t.id}
               className={'tool' + (S.tool === t.id ? ' on' : '')}
+              disabled={t.id === 'restore' && !p.reference?.converted}
               title={`${t.label} (${t.key})`}
               aria-label={t.label}
               onClick={() => setTool(t.id)}

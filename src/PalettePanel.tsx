@@ -2,9 +2,67 @@ import { useEffect, useMemo, useState } from 'react';
 import { inkFor } from './color';
 import { SYMBOLS, countCells } from './model';
 import {
-  S, addColor, deleteColor, emit, mergeInto, reduceTo, removeStrays, removeUnusedColors, setColorHex,
-  setColorSymbol, useStore,
+  RefMode, S, addColor, deleteColor, emit, loadReferencePhoto, mergeInto, reduceTo, removeReference, removeStrays,
+  removeUnusedColors, setColorHex, setColorSymbol, useStore,
 } from './store';
+
+function ReferenceSection() {
+  const ref = S.pattern.reference;
+  const set = (mode: RefMode) => { S.refMode = mode; emit(false); };
+  const picker = (label: string) => (
+    <label className="btn small">
+      {label}
+      <input
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) loadReferencePhoto(f).catch(() => {});
+        }}
+      />
+    </label>
+  );
+  const options: [RefMode, string][] = [['off', 'Off']];
+  if (ref?.photo) options.push(['photo', 'Photo']);
+  if (ref?.converted) options.push(['converted', 'First conversion']);
+
+  return (
+    <div className="reference">
+      <h3>Guide picture</h3>
+      {!ref ? (
+        <div className="editor-row">{picker('Add a photo to trace')}</div>
+      ) : (
+        <>
+          <div className="seg">
+            {options.map(([mode, label]) => (
+              <button key={mode} className={S.refMode === mode ? 'on' : ''} onClick={() => set(mode)}>{label}</button>
+            ))}
+          </div>
+          <div className="editor-row">
+            <label>Pattern</label>
+            <input
+              type="range"
+              className="fade"
+              min={0}
+              max={100}
+              value={Math.round(S.refOpacity * 100)}
+              disabled={S.refMode === 'off'}
+              onChange={(e) => { S.refOpacity = Number(e.target.value) / 100; emit(false); }}
+            />
+            <label>Guide</label>
+          </div>
+          <p className="note">Hold P to see the guide in full.</p>
+          <div className="editor-row">
+            {picker(ref.photo ? 'Change photo' : 'Add photo')}
+            <button className="btn small" onClick={removeReference}>Remove guide</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function PalettePanel() {
   useStore();
@@ -23,6 +81,7 @@ export function PalettePanel() {
 
   return (
     <aside className="panel">
+      <ReferenceSection />
       <div className="panel-head">
         <h2>Colors <span className="muted">{p.palette.length}</span></h2>
         <button className="btn small" onClick={() => addColor()}>+ Add color</button>

@@ -1,11 +1,13 @@
 import { useSyncExternalStore } from 'react';
 import { clamp, hslToHex } from './color';
 import {
-  Backstitch, MAX_SIZE, PaletteColor, Pattern, createPattern, deserialize, despeckle, mergeColor,
+  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, createPattern, deserialize, despeckle, mergeColor,
   nextId, nextSymbol, reduceColors, removeColor, removeUnused, resized, serialize,
 } from './model';
 
-export type Tool = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rect' | 'select' | 'backstitch' | 'pan';
+export type Tool =
+  | 'pencil' | 'eraser' | 'recolor' | 'tidy' | 'restore' | 'fill' | 'picker' | 'line' | 'rect' | 'select' | 'backstitch' | 'pan';
+export type RefMode = 'off' | 'photo' | 'converted';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 /** A piece of the pattern that has been picked up and is being moved or pasted. */
@@ -18,6 +20,7 @@ interface Snapshot {
   cells: Uint16Array;
   palette: PaletteColor[];
   backstitches: Backstitch[];
+  reference?: Reference;
 }
 
 const AUTOSAVE_KEY = 'crosspattern.autosave';
@@ -43,6 +46,12 @@ export const S = {
   showGrid: true,
   /** Palette id to spotlight (others are faded), or 0. */
   highlight: 0,
+  /** Paint both halves at once, mirrored left to right. */
+  mirror: false,
+  /** Which guide picture is shown over the pattern, how strongly, and whether it is being peeked at in full. */
+  refMode: 'off' as RefMode,
+  refOpacity: 0.5,
+  refPeek: false,
   selection: null as Rect | null,
   floating: null as Floating | null,
   view: { scale: 16, ox: 40, oy: 40 },
@@ -84,7 +93,13 @@ function autosave(): void {
   if (!unsaved) return;
   clearTimeout(saveTimer);
   unsaved = false;
-  try { localStorage.setItem(AUTOSAVE_KEY, serialize(patternForSaving())); } catch { /* storage full or blocked */ }
+  const p = patternForSaving();
+  try {
+    localStorage.setItem(AUTOSAVE_KEY, serialize(p));
+  } catch {
+    // Most likely the reference photo made it too big for browser storage; the pattern itself matters more.
+    try { localStorage.setItem(AUTOSAVE_KEY, serialize(p, false)); } catch { /* storage full or blocked */ }
+  }
 }
 // Don't lose the last half second of work when the tab is closed or reloaded.
 window.addEventListener('pagehide', autosave);
@@ -116,6 +131,7 @@ function snapshot(): Snapshot {
     cells: p.cells.slice(),
     palette: p.palette.map((c) => ({ ...c })),
     backstitches: p.backstitches.map((b) => ({ ...b })),
+    reference: p.reference,
   };
 }
 
@@ -125,6 +141,9 @@ function restore(s: Snapshot): void {
 }
 
 function fixCurrentColor(): void {
+  const ref = S.pattern.reference;
+  if ((S.refMode === 'photo' && !ref?.photo) || (S.refMode === 'converted' && !ref?.converted)) S.refMode = 'off';
+  if (S.tool === 'restore' && !ref?.converted) S.tool = 'pencil';
   const pal = S.pattern.palette;
   if (!pal.some((c) => c.id === S.colorId)) S.colorId = pal[0]?.id ?? 0;
   if (S.highlight && !pal.some((c) => c.id === S.highlight)) S.highlight = 0;
@@ -200,6 +219,7 @@ export function zoomBy(factor: number): void {
 // ---- Tools and selection ------------------------------------------------
 
 export function setTool(tool: Tool): void {
+  if (tool === 'restore' && !S.pattern.reference?.converted) return;
   if (tool !== 'select') { commitFloating(); S.selection = null; }
   S.tool = tool;
   emit(false);
@@ -399,4 +419,59 @@ export function saveFile(): void {
 
 export async function openFile(file: File): Promise<void> {
   setPattern(deserialize(await file.text()));
+}
+
+// ---- Reference pictures -------------------------------------------------
+
+let refCache: { src: string; img: HTMLImageElement; ready: boolean } | null = null;
+
+/** The reference photo as a drawable image, or null while it is still loading. */
+export function refImage(src: string): HTMLImageElement | null {
+  if (refCache?.src !== src) {
+    const entry = { src, img: new Image(), ready: false };
+    entry.img.onload = () => { entry.ready = true; emit(false); };
+    entry.img.src = src;
+    refCache = entry;
+  }
+  return refCache.ready ? refCache.img : null;
+}
+
+/** Shrinks a picture (or part of one) to a size that is cheap to store alongside the pattern. */
+export function photoDataUrl(img: HTMLImageElement, sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight): string {
+  const k = Math.min(1, 1200 / Math.max(sw, sh));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(sw * k));
+  c.height = Math.max(1, Math.round(sh * k));
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, c.width, c.height);
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+
+/** Adds a photo to trace over, fitted inside the canvas. */
+export async function loadReferencePhoto(file: Blob): Promise<void> {
+  const img = new Image();
+  img.src = URL.createObjectURL(file);
+  await img.decode();
+  const p = S.pattern;
+  const k = Math.min(p.width / img.naturalWidth, p.height / img.naturalHeight);
+  const w = img.naturalWidth * k, h = img.naturalHeight * k;
+  pushUndo();
+  p.reference = {
+    ...p.reference,
+    photo: photoDataUrl(img),
+    rect: { x: (p.width - w) / 2, y: (p.height - h) / 2, w, h },
+  };
+  URL.revokeObjectURL(img.src);
+  S.refMode = 'photo';
+  emit();
+}
+
+export function removeReference(): void {
+  pushUndo();
+  S.pattern.reference = undefined;
+  fixCurrentColor();
+  emit();
 }

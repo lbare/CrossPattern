@@ -1,14 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { clamp } from './color';
-import { floodFill, linePoints, replaceAll } from './model';
-import { FABRIC, buildCellImage, drawOverlay } from './render';
+import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
+import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
-  S, commitFloating, dropUndo, emit, fitView, keys, liftSelection, pushUndo, subscribe, zoomAt,
+  S, Tool, commitFloating, dropUndo, emit, fitView, keys, liftSelection, pushUndo, refImage, subscribe, zoomAt,
 } from './store';
+
+type CellFn = (x: number, y: number) => void;
+const BRUSH_TOOLS: Tool[] = ['pencil', 'eraser', 'recolor', 'tidy', 'restore', 'line'];
 
 type Drag =
   | { mode: 'pan'; px: number; py: number; ox: number; oy: number }
-  | { mode: 'paint'; id: number; lx: number; ly: number }
+  | { mode: 'paint'; fn: CellFn; size: number; lx: number; ly: number }
   | { mode: 'shape' }
   | { mode: 'move'; sx: number; sy: number; fx: number; fy: number }
   | { mode: 'select'; x0: number; y0: number; moved: boolean };
@@ -42,19 +45,50 @@ export function CanvasView() {
     const hexOf = (id: number) => S.pattern.palette.find((c) => c.id === id)?.hex ?? '#000000';
 
     /** Squares covered by the brush when its centre is at x, y. */
-    const brushCells = (x: number, y: number, fn: (x: number, y: number) => void) => {
-      const b = S.brush, off = Math.floor((b - 1) / 2);
+    const brushCells = (x: number, y: number, fn: CellFn, b = S.brush) => {
+      const off = Math.floor((b - 1) / 2);
       for (let dy = 0; dy < b; dy++) for (let dx = 0; dx < b; dx++) {
         const xx = x - off + dx, yy = y - off + dy;
         if (inside(xx, yy)) fn(xx, yy);
       }
     };
-    const paint = (x: number, y: number, id: number) =>
-      brushCells(x, y, (xx, yy) => { S.pattern.cells[yy * S.pattern.width + xx] = id; });
-    const stroke = (x0: number, y0: number, x1: number, y1: number, id: number) => {
-      for (const [x, y] of linePoints(x0, y0, x1, y1)) paint(x, y, id);
+    /** The tidy brush needs neighbours to judge by, so it never works on a single square. */
+    const sizeFor = (tool: Tool) => (tool === 'tidy' ? Math.max(3, S.brush) : S.brush);
+
+    /** With mirror on, everything done to a square is also done to its twin across the centre line. */
+    const mirrored = (fn: CellFn): CellFn => (x, y) => {
+      fn(x, y);
+      const mx = S.pattern.width - 1 - x;
+      if (S.mirror && mx !== x) fn(mx, y);
     };
-    const shapeCells = (p: Preview, fn: (x: number, y: number) => void) => {
+
+    /** What one brush does to one square. `target` is the color that was under the cursor when the stroke began. */
+    const cellAction = (tool: Tool, target: number): CellFn => {
+      const p = S.pattern, cv = p.reference?.converted;
+      const ids = new Map(p.palette.map((c) => [c.hex, c.id]));
+      return (x, y) => {
+        const i = y * p.width + x;
+        if (tool === 'pencil') p.cells[i] = S.colorId;
+        else if (tool === 'eraser') p.cells[i] = 0;
+        else if (tool === 'recolor') { if (p.cells[i] === target) p.cells[i] = S.colorId; }
+        else if (tool === 'tidy') tidyCell(p.cells, p.width, p.height, x, y);
+        else if (tool === 'restore' && cv && x < cv.width && y < cv.height) {
+          const v = cv.cells[y * cv.width + x];
+          if (!v) { p.cells[i] = 0; return; }
+          const hex = cv.hexes[v - 1];
+          let id = ids.get(hex);
+          if (id === undefined) {
+            // The color was merged or deleted since converting, so bring it back.
+            id = nextId(p.palette);
+            p.palette.push({ id, hex, symbol: nextSymbol(p.palette) });
+            ids.set(hex, id);
+          }
+          p.cells[i] = id;
+        }
+      };
+    };
+
+    const shapeCells = (p: Preview, fn: CellFn) => {
       if (p.kind === 'line') {
         for (const [x, y] of linePoints(p.x0, p.y0, p.x1, p.y1)) brushCells(x, y, fn);
         return;
@@ -81,6 +115,30 @@ export function CanvasView() {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, ox, oy, pw, ph);
 
+      // Guide picture over the stitches: the photo or the first conversion, faded, or in full while peeking.
+      const ref = p.reference;
+      const showing = S.refPeek && S.refMode === 'off' ? (ref?.photo ? 'photo' : 'converted') : S.refMode;
+      if (ref && showing !== 'off') {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(ox, oy, pw, ph);
+        ctx.clip();
+        ctx.globalAlpha = S.refPeek ? 1 : S.refOpacity;
+        if (showing === 'photo' && ref.photo) {
+          const photo = refImage(ref.photo);
+          if (photo) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(photo, ox + ref.rect.x * scale, oy + ref.rect.y * scale, ref.rect.w * scale, ref.rect.h * scale);
+          }
+        } else if (showing === 'converted' && ref.converted) {
+          ctx.fillStyle = FABRIC;
+          ctx.fillRect(ox, oy, pw, ph);
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(convertedImage(ref.converted), ox, oy, ref.converted.width * scale, ref.converted.height * scale);
+        }
+        ctx.restore();
+      }
+
       ctx.save();
       ctx.translate(ox, oy);
 
@@ -96,7 +154,7 @@ export function CanvasView() {
       if (preview && preview.kind !== 'backstitch') {
         ctx.fillStyle = hexOf(S.colorId);
         ctx.globalAlpha = 0.75;
-        shapeCells(preview, (x, y) => ctx.fillRect(x * scale, y * scale, scale, scale));
+        shapeCells(preview, mirrored((x, y) => ctx.fillRect(x * scale, y * scale, scale, scale)));
         ctx.globalAlpha = 1;
       }
 
@@ -109,6 +167,18 @@ export function CanvasView() {
         grid: S.showGrid, symbols: S.showSymbols, rulers: true,
         ink: getComputedStyle(wrap).color, highlight: S.highlight,
       });
+
+      if (S.mirror) {
+        const mx = Math.round((p.width / 2) * scale) + 0.5;
+        ctx.strokeStyle = '#e11d74';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(mx, 0);
+        ctx.lineTo(mx, ph);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       if (preview?.kind === 'backstitch') {
         ctx.strokeStyle = hexOf(S.colorId);
@@ -145,7 +215,7 @@ export function CanvasView() {
           ctx.stroke();
         } else if (S.tool !== 'pan' && S.tool !== 'select') {
           const cx = Math.floor(hover.x), cy = Math.floor(hover.y);
-          const b = S.tool === 'pencil' || S.tool === 'eraser' || S.tool === 'line' ? S.brush : 1;
+          const b = BRUSH_TOOLS.includes(S.tool) ? sizeFor(S.tool) : 1;
           const off = Math.floor((b - 1) / 2);
           if (inside(cx, cy)) ctx.strokeRect((cx - off) * scale + 0.5, (cy - off) * scale + 0.5, b * scale, b * scale);
         }
@@ -194,11 +264,16 @@ export function CanvasView() {
 
       switch (tool) {
         case 'pencil':
-        case 'eraser': {
-          const id = tool === 'pencil' ? S.colorId : 0;
+        case 'eraser':
+        case 'recolor':
+        case 'tidy':
+        case 'restore': {
+          if (tool === 'restore' && !p.reference?.converted) break;
+          const target = inside(c.x, c.y) ? p.cells[c.y * p.width + c.x] : -1;
           pushUndo();
-          paint(c.x, c.y, id);
-          drag = { mode: 'paint', id, lx: c.x, ly: c.y };
+          const fn = mirrored(cellAction(tool, target)), size = sizeFor(tool);
+          brushCells(c.x, c.y, fn, size);
+          drag = { mode: 'paint', fn, size, lx: c.x, ly: c.y };
           emit();
           break;
         }
@@ -266,7 +341,7 @@ export function CanvasView() {
           schedule();
           break;
         case 'paint':
-          stroke(drag.lx, drag.ly, c.x, c.y, drag.id);
+          for (const [x, y] of linePoints(drag.lx, drag.ly, c.x, c.y)) brushCells(x, y, drag.fn, drag.size);
           drag.lx = c.x;
           drag.ly = c.y;
           emit();
@@ -318,7 +393,7 @@ export function CanvasView() {
           }
         } else {
           pushUndo();
-          shapeCells(pv, (x, y) => { p.cells[y * p.width + x] = S.colorId; });
+          shapeCells(pv, mirrored((x, y) => { p.cells[y * p.width + x] = S.colorId; }));
         }
         preview = null;
         emit();

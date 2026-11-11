@@ -242,3 +242,10 @@ main { display: grid; grid-template-columns: 48px 1fr 264px; min-height: 0; }
 }
 .mode-help { min-height: 4.2em; }
 .summary b { font-size: 16px; }
+
+/* ---- Guide picture controls and tool states ---- */
+.reference { padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; border-bottom: 1px solid var(--border); }
+.reference .fade { flex: 1; padding: 0; border: 0; accent-color: var(--accent); }
+.tool:disabled { opacity: 0.3; cursor: default; }
+.tool:disabled:hover { background: none; }
+.tools { overflow-y: auto; }

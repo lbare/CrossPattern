@@ -1,5 +1,5 @@
 import { hexToRgb, inkFor } from './color';
-import { Pattern, countCells } from './model';
+import { Converted, Pattern, countCells } from './model';
 
 export const FABRIC = '#faf7f0';
 
@@ -172,5 +172,30 @@ export function renderExport(p: Pattern, o: ExportOptions): HTMLCanvasElement {
       ctx.fillText(`${col.hex.toUpperCase()}   ${counts.get(col.id) ?? 0} stitches`, x + 28, y + 11);
     });
   }
+  return c;
+}
+
+const convertedCache = new WeakMap<Converted, HTMLCanvasElement>();
+
+/** The first conversion painted at one pixel per square, for showing over the edited pattern. */
+export function convertedImage(cv: Converted): HTMLCanvasElement {
+  let c = convertedCache.get(cv);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = cv.width;
+  c.height = cv.height;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(cv.width, cv.height);
+  const out = new Uint32Array(img.data.buffer);
+  const lut = cv.hexes.map((hex) => {
+    const [r, g, b] = hexToRgb(hex);
+    return (0xff000000 | (b << 16) | (g << 8) | r) >>> 0;
+  });
+  for (let i = 0; i < out.length; i++) {
+    const v = cv.cells[i];
+    out[i] = v ? lut[v - 1] : 0;
+  }
+  ctx.putImageData(img, 0, 0);
+  convertedCache.set(cv, c);
   return c;
 }
