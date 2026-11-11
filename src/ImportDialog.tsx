@@ -8,7 +8,7 @@ import {
 } from './marks';
 import { MAX_SIZE, paletteFromHexes } from './model';
 import { FABRIC } from './render';
-import { photoDataUrl, setPattern } from './store';
+import { openAsNewProject, photoDataUrl } from './store';
 
 function loadImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -231,7 +231,7 @@ function MarkCanvas(props: {
 
 // ---- The dialog ---------------------------------------------------------
 
-export function ImportDialog({ onClose }: { onClose: () => void }) {
+export function ImportDialog({ onClose, initialFile }: { onClose: () => void; initialFile?: File | null }) {
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -281,6 +281,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   };
 
   useEffect(() => {
+    if (initialFile) take(initialFile, initialFile.name);
     const onPaste = (e: ClipboardEvent) => {
       const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith('image/'));
       if (item) take(item.getAsFile(), 'Pasted image');
@@ -361,7 +362,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
 
   const create = () => {
     if (!result) return;
-    setPattern({
+    openAsNewProject({
       name: name || 'Imported pattern',
       width: result.width,
       height: result.height,
@@ -513,7 +514,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             </figure>
           </div>
           <footer>
-            <span className="hint grow">This replaces the current pattern. Undo in the editor brings it back.</span>
+            <span className="hint grow">Opens as a new project. Your current one stays in Projects.</span>
             <button className="btn" onClick={() => setStep('crop')}>Back</button>
             <button className="btn primary" disabled={!result?.palette.length} onClick={create}>Create pattern</button>
           </footer>

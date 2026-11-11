@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { inkFor } from './color';
 import { SYMBOLS, countCells } from './model';
 import {
-  RefMode, S, addColor, deleteColor, emit, loadReferencePhoto, mergeInto, reduceTo, removeReference, removeStrays,
-  removeUnusedColors, setColorHex, setColorSymbol, useStore,
+  RefMode, S, addColor, addOutline, deleteColor, emit, loadReferencePhoto, mergeInto, reduceTo, removeReference,
+  removeStrays, removeUnusedColors, setColorHex, setColorSymbol, sortPaletteByUse, toggleLock, useStore,
 } from './store';
 
 function ReferenceSection() {
@@ -84,7 +84,10 @@ export function PalettePanel() {
       <ReferenceSection />
       <div className="panel-head">
         <h2>Colors <span className="muted">{p.palette.length}</span></h2>
-        <button className="btn small" onClick={() => addColor()}>+ Add color</button>
+        <span className="editor-row">
+          <button className="btn small" title="Put the most-used colors first" onClick={sortPaletteByUse}>Sort</button>
+          <button className="btn small" onClick={() => addColor()}>+ Add color</button>
+        </span>
       </div>
 
       {cur && (
@@ -124,6 +127,18 @@ export function PalettePanel() {
             >
               Highlight
             </button>
+            <button
+              className={'btn small' + (cur.locked ? ' on' : '')}
+              title="Locked colors can't be painted over by any tool"
+              onClick={() => toggleLock(cur.id)}
+            >
+              {cur.locked ? 'Locked' : 'Lock'}
+            </button>
+            <button className="btn small danger" title="Delete this color and its stitches" onClick={() => deleteColor(cur.id)}>
+              Delete
+            </button>
+          </div>
+          <div className="editor-row">
             <select
               className="merge"
               value=""
@@ -135,9 +150,6 @@ export function PalettePanel() {
                 <option key={c.id} value={c.id}>{c.symbol} {c.hex}</option>
               ))}
             </select>
-            <button className="btn small danger" title="Delete this color and its stitches" onClick={() => deleteColor(cur.id)}>
-              Delete
-            </button>
           </div>
         </div>
       )}
@@ -155,6 +167,7 @@ export function PalettePanel() {
           >
             <span className="swatch" style={{ background: c.hex, color: inkFor(c.hex) }}>{c.symbol}</span>
             <span className="code">{c.hex}</span>
+            {c.locked && <span className="lock" title="Locked">locked</span>}
             <span className="count">{counts.get(c.id) ?? 0}</span>
           </li>
         ))}
@@ -194,6 +207,23 @@ export function PalettePanel() {
         <div className="editor-row">
           <button className="btn small" onClick={() => { removeUnusedColors(); setNote('Removed unused colors.'); }}>
             Remove unused colors
+          </button>
+        </div>
+        <div className="editor-row">
+          <label>Outline</label>
+          <button
+            className="btn small push"
+            title="Backstitch along the edge between stitches and empty fabric, in the current color"
+            onClick={() => setNote(addOutline('backstitch') ? 'Added a backstitch outline.' : 'No edge next to empty fabric to outline.')}
+          >
+            Backstitch
+          </button>
+          <button
+            className="btn small"
+            title="Recolor the outermost stitches next to empty fabric, in the current color"
+            onClick={() => setNote(addOutline('stitches') ? 'Outlined with stitches.' : 'No edge next to empty fabric to outline.')}
+          >
+            Stitches
           </button>
         </div>
         {note && <p className="note">{note}</p>}

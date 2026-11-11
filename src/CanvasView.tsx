@@ -3,7 +3,9 @@ import { clamp } from './color';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
-  S, Tool, commitFloating, dropUndo, emit, fitView, keys, liftSelection, pushUndo, refImage, subscribe, zoomAt,
+  S, Tool, addColor, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, dropUndo, emit,
+  fitView, keys, liftSelection, lockedIds, openDialog, pushUndo, refImage, samplePhoto, selectedRect, subscribe, transformSelection,
+  useStore, zoomAt,
 } from './store';
 
 type CellFn = (x: number, y: number) => void;
@@ -66,8 +68,10 @@ export function CanvasView() {
     const cellAction = (tool: Tool, target: number): CellFn => {
       const p = S.pattern, cv = p.reference?.converted;
       const ids = new Map(p.palette.map((c) => [c.hex, c.id]));
+      const locked = lockedIds();
       return (x, y) => {
         const i = y * p.width + x;
+        if (locked.has(p.cells[i])) return;
         if (tool === 'pencil') p.cells[i] = S.colorId;
         else if (tool === 'eraser') p.cells[i] = 0;
         else if (tool === 'recolor') { if (p.cells[i] === target) p.cells[i] = S.colorId; }
@@ -278,7 +282,7 @@ export function CanvasView() {
           break;
         }
         case 'fill': {
-          if (!inside(c.x, c.y)) break;
+          if (!inside(c.x, c.y) || lockedIds().has(p.cells[c.y * p.width + c.x])) break;
           pushUndo();
           const changed = e.shiftKey
             ? replaceAll(p.cells, p.cells[c.y * p.width + c.x], S.colorId)
@@ -287,6 +291,15 @@ export function CanvasView() {
           break;
         }
         case 'picker': {
+          if (e.shiftKey) {
+            // Shift picks the exact shade from the guide photo instead of from the stitches.
+            const hex = inside(c.x, c.y) ? samplePhoto(c.x, c.y) : null;
+            if (!hex) break;
+            const have = p.palette.find((col) => col.hex === hex);
+            if (have) { S.colorId = have.id; emit(false); } else addColor(hex);
+            if (S.tool === 'picker') { S.tool = 'pencil'; emit(false); }
+            break;
+          }
           const id = inside(c.x, c.y) ? p.cells[c.y * p.width + c.x] : 0;
           if (id) {
             S.colorId = id;
@@ -393,7 +406,8 @@ export function CanvasView() {
           }
         } else {
           pushUndo();
-          shapeCells(pv, mirrored((x, y) => { p.cells[y * p.width + x] = S.colorId; }));
+          const locked = lockedIds();
+          shapeCells(pv, mirrored((x, y) => { if (!locked.has(p.cells[y * p.width + x])) p.cells[y * p.width + x] = S.colorId; }));
         }
         preview = null;
         emit();
@@ -454,6 +468,39 @@ export function CanvasView() {
   return (
     <div className="canvas-wrap">
       <canvas ref={ref} />
+      <SelectionBar />
+    </div>
+  );
+}
+
+/** Actions for the current selection, shown over the canvas while something is selected. */
+function SelectionBar() {
+  useStore();
+  const r = S.floating ?? S.selection;
+  if (!r) return null;
+  const reconvert = () => {
+    // Put any piece that is being moved back down first, so the dialog works on what is really there.
+    const rect = selectedRect();
+    commitFloating();
+    S.selection = rect;
+    openDialog('reconvert');
+  };
+  return (
+    <div className="selbar">
+      <span className="muted">{r.w} × {r.h}</span>
+      <button className="btn small" onClick={() => transformSelection('flipH')}>Flip ↔</button>
+      <button className="btn small" onClick={() => transformSelection('flipV')}>Flip ↕</button>
+      <button className="btn small" onClick={() => transformSelection('rotate')}>Rotate ↻</button>
+      <button className="btn small" onClick={() => copySelection()}>Copy</button>
+      <button className="btn small" onClick={cutSelection}>Cut</button>
+      <button className="btn small" onClick={deleteSelection}>Delete</button>
+      <button className="btn small" title="Trim the canvas down to the selection" onClick={cropToSelection}>Crop canvas</button>
+      {S.pattern.reference?.photo && (
+        <button className="btn small" title="Convert this part of the photo again with different settings" onClick={reconvert}>
+          Re-convert…
+        </button>
+      )}
+      <button className="btn small primary" onClick={() => { commitFloating(); S.selection = null; emit(false); }}>Done</button>
     </div>
   );
 }

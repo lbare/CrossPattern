@@ -4,6 +4,8 @@ export interface PaletteColor {
   id: number;
   hex: string;
   symbol: string;
+  /** Locked colors can't be painted over by any tool. */
+  locked?: boolean;
 }
 
 /** A backstitch runs between grid intersections (0..width, 0..height). */
@@ -238,6 +240,65 @@ export function resized(p: Pattern, width: number, height: number): Pattern {
   return { ...p, width, height, cells, backstitches: p.backstitches.filter(fits) };
 }
 
+/** Cuts the canvas down to a rectangle, carrying backstitches and guide pictures along. */
+export function cropped(p: Pattern, r: { x: number; y: number; w: number; h: number }): Pattern {
+  const cells = new Uint16Array(r.w * r.h);
+  for (let y = 0; y < r.h; y++) cells.set(p.cells.subarray((r.y + y) * p.width + r.x, (r.y + y) * p.width + r.x + r.w), y * r.w);
+  const backstitches = p.backstitches
+    .map((b) => ({ ...b, x1: b.x1 - r.x, y1: b.y1 - r.y, x2: b.x2 - r.x, y2: b.y2 - r.y }))
+    .filter((b) => Math.min(b.x1, b.x2) >= 0 && Math.min(b.y1, b.y2) >= 0 && Math.max(b.x1, b.x2) <= r.w && Math.max(b.y1, b.y2) <= r.h);
+  let reference = p.reference;
+  if (reference) {
+    const cv = reference.converted;
+    let converted: Converted | undefined;
+    if (cv && r.x + r.w <= cv.width && r.y + r.h <= cv.height) {
+      const cc = new Uint16Array(r.w * r.h);
+      for (let y = 0; y < r.h; y++) cc.set(cv.cells.subarray((r.y + y) * cv.width + r.x, (r.y + y) * cv.width + r.x + r.w), y * r.w);
+      converted = { width: r.w, height: r.h, hexes: cv.hexes, cells: cc };
+    }
+    reference = { photo: reference.photo, rect: { ...reference.rect, x: reference.rect.x - r.x, y: reference.rect.y - r.y }, converted };
+  }
+  return { ...p, width: r.w, height: r.h, cells, backstitches, reference };
+}
+
+/** Grid-line segments that run along every boundary between stitched and empty squares. */
+export function outlineEdges(p: Pattern): { x1: number; y1: number; x2: number; y2: number }[] {
+  const { width: w, height: h, cells } = p;
+  const filled = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h && cells[y * w + x] !== 0;
+  const out: { x1: number; y1: number; x2: number; y2: number }[] = [];
+  for (let y = 0; y <= h; y++) {
+    let start = -1;
+    for (let x = 0; x <= w; x++) {
+      const edge = x < w && filled(x, y - 1) !== filled(x, y);
+      if (edge && start < 0) start = x;
+      if (!edge && start >= 0) { out.push({ x1: start, y1: y, x2: x, y2: y }); start = -1; }
+    }
+  }
+  for (let x = 0; x <= w; x++) {
+    let start = -1;
+    for (let y = 0; y <= h; y++) {
+      const edge = y < h && filled(x - 1, y) !== filled(x, y);
+      if (edge && start < 0) start = y;
+      if (!edge && start >= 0) { out.push({ x1: x, y1: start, x2: x, y2: y }); start = -1; }
+    }
+  }
+  return out;
+}
+
+/** Stitched squares that sit right next to empty fabric. */
+export function outlineCells(p: Pattern): number[] {
+  const { width: w, height: h, cells } = p;
+  const out: number[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!cells[i]) continue;
+      if ((x > 0 && !cells[i - 1]) || (x < w - 1 && !cells[i + 1]) || (y > 0 && !cells[i - w]) || (y < h - 1 && !cells[i + w])) out.push(i);
+    }
+  }
+  return out;
+}
+
 // ---- Saving and loading -------------------------------------------------
 
 function encodeRuns(cells: Uint16Array): number[] {
@@ -292,7 +353,7 @@ export function deserialize(text: string): Pattern {
   const cells = decodeRuns(d.cells, d.width * d.height);
   const palette: PaletteColor[] = (d.palette ?? [])
     .filter((c: PaletteColor) => Number.isInteger(c?.id) && /^#[0-9a-f]{6}$/i.test(c?.hex))
-    .map((c: PaletteColor) => ({ id: c.id, hex: c.hex.toLowerCase(), symbol: String(c.symbol ?? '?') }));
+    .map((c: PaletteColor) => ({ id: c.id, hex: c.hex.toLowerCase(), symbol: String(c.symbol ?? '?'), locked: c.locked ? true : undefined }));
   const ids = new Set(palette.map((c) => c.id));
   for (let k = 0; k < cells.length; k++) if (!ids.has(cells[k])) cells[k] = 0;
   const backstitches: Backstitch[] = (d.backstitches ?? []).filter(

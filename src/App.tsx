@@ -3,9 +3,10 @@ import { CanvasView } from './CanvasView';
 import { ImportDialog } from './ImportDialog';
 import { PalettePanel } from './PalettePanel';
 import { ExportDialog, NewDialog, ResizeDialog } from './dialogs';
+import { HelpDialog, ProjectsDialog, ReconvertDialog } from './extras';
 import {
-  S, Tool, commitFloating, copySelection, cutSelection, deleteSelection, emit, fitView, keys, openFile, paste,
-  redo, renamePattern, saveFile, setTool, undo, useStore, zoomBy,
+  S, Tool, commitFloating, copySelection, cutSelection, deleteSelection, emit, fitView, keys, nudgeSelection,
+  openDialog, openFile, paste, redo, renamePattern, saveFile, selectAll, setTool, undo, useStore, zoomBy,
 } from './store';
 
 const ICONS: Record<string, string> = {
@@ -49,11 +50,10 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: 'pan', label: 'Move view', key: 'H', hint: 'Drag to move around. Space-drag works with any tool.' },
 ];
 
-type Dialog = 'new' | 'import' | 'export' | 'resize' | null;
 
 export function App() {
   useStore();
-  const [dialog, setDialog] = useState<Dialog>(null);
+  const dialog = S.dialog, setDialog = openDialog;
   const [error, setError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
   const dialogOpen = useRef(false);
@@ -74,6 +74,7 @@ export function App() {
         else if (k === 'c') copySelection();
         else if (k === 'x') cutSelection();
         else if (k === 'v') paste();
+        else if (k === 'a') selectAll();
         else return;
         e.preventDefault();
         return;
@@ -83,6 +84,10 @@ export function App() {
       else if (k === '=' || k === '+') zoomBy(1.25);
       else if (k === '-') zoomBy(0.8);
       else if (k === '0') fitView();
+      else if (k === '?') openDialog('help');
+      else if (k.startsWith('arrow') && (S.selection || S.floating)) {
+        nudgeSelection(k === 'arrowleft' ? -1 : k === 'arrowright' ? 1 : 0, k === 'arrowup' ? -1 : k === 'arrowdown' ? 1 : 0);
+      }
       else if (k === '[') { S.brush = Math.max(1, S.brush - 1); emit(false); }
       else if (k === ']') { S.brush = Math.min(8, S.brush + 1); emit(false); }
       else if (k === 'delete' || k === 'backspace') deleteSelection();
@@ -106,7 +111,18 @@ export function App() {
   const tool = TOOLS.find((t) => t.id === S.tool)!;
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      onDragOver={(e) => { if (!dialog) e.preventDefault(); }}
+      onDrop={async (e) => {
+        if (dialog) return;
+        e.preventDefault();
+        const f = e.dataTransfer.files[0];
+        if (!f) return;
+        if (f.type.startsWith('image/')) { S.droppedFile = f; setDialog('import'); return; }
+        try { await openFile(f); setError(''); } catch (err) { setError((err as Error).message); }
+      }}
+    >
       <header className="topbar">
         <div className="brand">CrossPattern</div>
         <input
@@ -116,6 +132,7 @@ export function App() {
           aria-label="Pattern name"
         />
         <div className="group">
+          <button className="btn" onClick={() => setDialog('projects')} title="All your projects in this browser">Projects</button>
           <button className="btn" onClick={() => setDialog('new')}>New</button>
           <button className="btn" onClick={() => fileInput.current?.click()}>Open</button>
           <button className="btn" onClick={saveFile} title="Save a project file (⌘S)">Save</button>
@@ -163,6 +180,9 @@ export function App() {
             Mirror
           </button>
         </div>
+        <div className="group">
+          <button className="btn icon" onClick={() => setDialog('help')} title="Keyboard shortcuts (?)">?</button>
+        </div>
       </header>
 
       <main>
@@ -198,7 +218,12 @@ export function App() {
       </footer>
 
       {dialog === 'new' && <NewDialog onClose={() => setDialog(null)} />}
-      {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} />}
+      {dialog === 'import' && (
+        <ImportDialog initialFile={S.droppedFile} onClose={() => { S.droppedFile = null; setDialog(null); }} />
+      )}
+      {dialog === 'projects' && <ProjectsDialog onClose={() => setDialog(null)} />}
+      {dialog === 'reconvert' && <ReconvertDialog onClose={() => setDialog(null)} />}
+      {dialog === 'help' && <HelpDialog onClose={() => setDialog(null)} />}
       {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === 'resize' && <ResizeDialog onClose={() => setDialog(null)} />}
     </div>

@@ -1,7 +1,10 @@
 import { useSyncExternalStore } from 'react';
-import { clamp, hslToHex } from './color';
+import { clamp, hslToHex, rgbToHex } from './color';
+import { ProjectRecord, deleteProject, getProject, listProjects, putProject } from './db';
+import { FABRIC, buildCellImage } from './render';
 import {
-  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, createPattern, deserialize, despeckle, mergeColor,
+  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, createPattern, cropped, deserialize, despeckle, mergeColor,
+  outlineCells, outlineEdges,
   nextId, nextSymbol, reduceColors, removeColor, removeUnused, resized, serialize,
 } from './model';
 
@@ -26,19 +29,20 @@ interface Snapshot {
 const AUTOSAVE_KEY = 'crosspattern.autosave';
 const UNDO_LIMIT = 100;
 
-function loadAutosave(): Pattern | null {
-  try {
-    const text = localStorage.getItem(AUTOSAVE_KEY);
-    return text ? deserialize(text) : null;
-  } catch {
-    return null;
-  }
-}
+const CURRENT_KEY = 'crosspattern.current';
+const DRAFT_KEY = 'crosspattern.draft';
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 
-const initial = loadAutosave() ?? createPattern(60, 60);
+const initial = createPattern(60, 60);
 
 export const S = {
   pattern: initial,
+  /** Which project in the library is open. */
+  projectId: newId(),
+  /** Name of the dialog that is open, if any. */
+  dialog: null as string | null,
+  /** A picture dropped onto the window, waiting to be converted. */
+  droppedFile: null as File | null,
   tool: 'pencil' as Tool,
   colorId: initial.palette[0]?.id ?? 0,
   brush: 1,
@@ -89,21 +93,77 @@ function patternForSaving(): Pattern {
   return { ...p, cells };
 }
 
-function autosave(): void {
-  if (!unsaved) return;
+function thumbnail(p: Pattern): string {
+  const k = 200 / Math.max(p.width, p.height);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(p.width * k));
+  c.height = Math.max(1, Math.round(p.height * k));
+  const g = c.getContext('2d')!;
+  g.fillStyle = FABRIC;
+  g.fillRect(0, 0, c.width, c.height);
+  g.imageSmoothingEnabled = k < 1;
+  g.drawImage(buildCellImage(p, 0), 0, 0, c.width, c.height);
+  return c.toDataURL('image/png');
+}
+
+function currentRecord(): ProjectRecord {
+  const p = patternForSaving();
+  return {
+    id: S.projectId, name: p.name, updatedAt: Date.now(), width: p.width, height: p.height,
+    thumb: thumbnail(p), data: serialize(p),
+  };
+}
+
+/**
+ * Saves the open project to the library. With `leaving`, a copy is also written synchronously to
+ * localStorage, because the library write may not finish before the tab closes.
+ */
+function autosave(leaving = false): Promise<unknown> {
+  if (!unsaved) return Promise.resolve();
   clearTimeout(saveTimer);
   unsaved = false;
-  const p = patternForSaving();
-  try {
-    localStorage.setItem(AUTOSAVE_KEY, serialize(p));
-  } catch {
-    // Most likely the reference photo made it too big for browser storage; the pattern itself matters more.
-    try { localStorage.setItem(AUTOSAVE_KEY, serialize(p, false)); } catch { /* storage full or blocked */ }
+  const rec = currentRecord();
+  if (leaving) {
+    const draft = (data: string) => JSON.stringify({ id: rec.id, updatedAt: rec.updatedAt, data });
+    try {
+      localStorage.setItem(DRAFT_KEY, draft(rec.data));
+    } catch {
+      // Too big for localStorage, most likely the guide photo; the pattern itself matters more.
+      try { localStorage.setItem(DRAFT_KEY, draft(serialize(patternForSaving(), false))); } catch { /* blocked */ }
+    }
   }
+  return putProject(rec).catch(() => {});
 }
 // Don't lose the last half second of work when the tab is closed or reloaded.
-window.addEventListener('pagehide', autosave);
-document.addEventListener('visibilitychange', () => { if (document.hidden) autosave(); });
+window.addEventListener('pagehide', () => { autosave(true); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) autosave(true); });
+
+/** Loads the project that was open last time. Call once before showing the app. */
+export async function initStore(): Promise<void> {
+  let id = localStorage.getItem(CURRENT_KEY);
+  let data: string | undefined;
+  let migrated = false;
+  try {
+    const rec = id ? await getProject(id) : undefined;
+    data = rec?.data;
+    const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? 'null');
+    if (draft && draft.id === id && (!rec || draft.updatedAt >= rec.updatedAt)) { data = draft.data; migrated = true; }
+    if (!data) {
+      // Work saved by the first version of the app, before there was a library.
+      const legacy = localStorage.getItem(AUTOSAVE_KEY);
+      if (legacy) { data = legacy; migrated = true; id = null; localStorage.removeItem(AUTOSAVE_KEY); }
+    }
+    if (!data) {
+      const latest = (await listProjects())[0];
+      if (latest) { id = latest.id; data = latest.data; }
+    }
+  } catch { /* library unavailable; start blank */ }
+  try { if (data) S.pattern = deserialize(data); } catch { /* damaged save; start blank */ }
+  S.projectId = id ?? newId();
+  localStorage.setItem(CURRENT_KEY, S.projectId);
+  fixCurrentColor();
+  if (migrated) { unsaved = true; autosave(); }
+}
 /** Tell the UI something changed. Pass false when the pattern itself is untouched (tool, zoom, selection). */
 export function emit(patternChanged = true): void {
   S.version++;
@@ -111,7 +171,7 @@ export function emit(patternChanged = true): void {
     S.cellsVersion++;
     unsaved = true;
     clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(autosave, 500);
+    saveTimer = window.setTimeout(() => autosave(), 500);
   }
   listeners.forEach((fn) => fn());
 }
@@ -247,15 +307,119 @@ export function liftSelection(): void {
 export function commitFloating(): void {
   const f = S.floating;
   if (!f) return;
-  const p = S.pattern;
+  const p = S.pattern, locked = lockedIds();
   for (let y = 0; y < f.h; y++) {
     for (let x = 0; x < f.w; x++) {
       const v = f.data[y * f.w + x], px = f.x + x, py = f.y + y;
-      if (v && px >= 0 && py >= 0 && px < p.width && py < p.height) p.cells[py * p.width + px] = v;
+      if (!v || px < 0 || py < 0 || px >= p.width || py >= p.height) continue;
+      if (!locked.has(p.cells[py * p.width + px])) p.cells[py * p.width + px] = v;
     }
   }
   S.floating = null;
   S.selection = null;
+  emit();
+}
+
+/** Ids of colors the user has locked against being painted over. */
+export function lockedIds(): Set<number> {
+  return new Set(S.pattern.palette.filter((c) => c.locked).map((c) => c.id));
+}
+
+export function selectAll(): void {
+  commitFloating();
+  S.tool = 'select';
+  S.selection = { x: 0, y: 0, w: S.pattern.width, h: S.pattern.height };
+  emit(false);
+}
+
+/** Flips or turns the selected stitches in place. */
+export function transformSelection(kind: 'flipH' | 'flipV' | 'rotate'): void {
+  if (!S.floating) liftSelection();
+  const f = S.floating;
+  if (!f) return;
+  const { w, h, data } = f;
+  const out = new Uint16Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = data[y * w + x];
+      if (kind === 'flipH') out[y * w + (w - 1 - x)] = v;
+      else if (kind === 'flipV') out[(h - 1 - y) * w + x] = v;
+      else out[x * h + (h - 1 - y)] = v; // quarter turn clockwise; the result is h wide and w tall
+    }
+  }
+  f.data = out;
+  if (kind === 'rotate') {
+    f.x += Math.round((w - h) / 2);
+    f.y += Math.round((h - w) / 2);
+    f.w = h;
+    f.h = w;
+  }
+  S.selection = { x: f.x, y: f.y, w: f.w, h: f.h };
+  emit();
+}
+
+export function nudgeSelection(dx: number, dy: number): void {
+  if (!S.floating) liftSelection();
+  const f = S.floating;
+  if (!f) return;
+  f.x += dx;
+  f.y += dy;
+  emit();
+}
+
+/** The selected rectangle, clipped to the canvas, or null. */
+export function selectedRect(): Rect | null {
+  const r = S.floating ?? S.selection;
+  if (!r) return null;
+  const x0 = Math.max(0, r.x), y0 = Math.max(0, r.y);
+  const x1 = Math.min(S.pattern.width, r.x + r.w), y1 = Math.min(S.pattern.height, r.y + r.h);
+  return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+}
+
+export function cropToSelection(): void {
+  const r = selectedRect();
+  if (!r) return;
+  commitFloating();
+  setPattern(cropped(S.pattern, r));
+}
+
+/** Outlines the subject in the current color, as backstitch along its edge or as its outermost stitches. */
+export function addOutline(kind: 'backstitch' | 'stitches'): number {
+  if (!S.colorId) return 0;
+  commitFloating();
+  const p = S.pattern;
+  pushUndo();
+  let n = 0;
+  if (kind === 'backstitch') {
+    const edges = outlineEdges(p);
+    p.backstitches.push(...edges.map((e) => ({ ...e, colorId: S.colorId })));
+    n = edges.length;
+  } else {
+    const locked = lockedIds();
+    for (const i of outlineCells(p)) if (!locked.has(p.cells[i])) { p.cells[i] = S.colorId; n++; }
+  }
+  if (n) emit(); else dropUndo();
+  return n;
+}
+
+/** Writes freshly converted stitches into a rectangle, e.g. after re-converting part of the photo. */
+export function applyConverted(rect: Rect, hexes: string[], cells: Uint16Array, ids: number[]): void {
+  commitFloating();
+  pushUndo();
+  const p = S.pattern, locked = lockedIds();
+  const map = ids.map((id, k) => {
+    if (id) return id;
+    const made = nextId(p.palette);
+    p.palette.push({ id: made, hex: hexes[k], symbol: nextSymbol(p.palette) });
+    return made;
+  });
+  for (let y = 0; y < rect.h; y++) {
+    for (let x = 0; x < rect.w; x++) {
+      const v = cells[y * rect.w + x], i = (rect.y + y) * p.width + rect.x + x;
+      if (!locked.has(p.cells[i])) p.cells[i] = v ? map[v - 1] : 0;
+    }
+  }
+  S.selection = rect;
   emit();
 }
 
@@ -337,6 +501,21 @@ export function setColorSymbol(id: number, symbol: string): void {
   emit();
 }
 
+export function toggleLock(id: number): void {
+  const c = S.pattern.palette.find((c) => c.id === id);
+  if (!c) return;
+  c.locked = c.locked ? undefined : true;
+  emit();
+}
+
+export function sortPaletteByUse(): void {
+  const p = S.pattern, counts = new Map<number, number>();
+  for (let i = 0; i < p.cells.length; i++) if (p.cells[i]) counts.set(p.cells[i], (counts.get(p.cells[i]) ?? 0) + 1);
+  pushUndo();
+  p.palette.sort((a, b) => (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0));
+  emit();
+}
+
 export function deleteColor(id: number): void {
   pushUndo();
   removeColor(S.pattern, id);
@@ -363,10 +542,15 @@ export function reduceTo(count: number): void {
 export function removeStrays(level: number): number {
   commitFloating();
   pushUndo();
-  const p = S.pattern;
-  const n = despeckle(p.cells, p.width, p.height, level);
-  if (n) emit(); else dropUndo();
-  return n;
+  const p = S.pattern, locked = lockedIds(), before = locked.size ? p.cells.slice() : null;
+  let n = despeckle(p.cells, p.width, p.height, level);
+  if (before) {
+    for (let i = 0; i < before.length; i++) {
+      if (p.cells[i] !== before[i] && locked.has(before[i])) { p.cells[i] = before[i]; n--; }
+    }
+  }
+  if (n > 0) emit(); else dropUndo();
+  return Math.max(0, n);
 }
 
 export function removeUnusedColors(): void {
@@ -418,7 +602,94 @@ export function saveFile(): void {
 }
 
 export async function openFile(file: File): Promise<void> {
-  setPattern(deserialize(await file.text()));
+  await openAsNewProject(deserialize(await file.text()));
+}
+
+// ---- Project library ----------------------------------------------------
+
+function isBlank(): boolean {
+  const p = S.pattern;
+  return !p.reference && !p.backstitches.length && p.cells.every((v) => v === 0);
+}
+
+function activate(id: string, p: Pattern): void {
+  S.projectId = id;
+  localStorage.setItem(CURRENT_KEY, id);
+  S.pattern = p;
+  S.undo = [];
+  S.redo = [];
+  S.floating = null;
+  S.selection = null;
+  S.highlight = 0;
+  fixCurrentColor();
+  emit();
+  fitView();
+}
+
+/** Opens a pattern as its own project, leaving the current one in the library. An untouched blank project is reused. */
+export async function openAsNewProject(p: Pattern): Promise<void> {
+  if (isBlank()) return setPattern(p);
+  await autosave();
+  activate(newId(), p);
+}
+
+export async function switchProject(id: string): Promise<void> {
+  if (id === S.projectId) return;
+  await autosave();
+  const rec = await getProject(id);
+  if (rec) activate(id, deserialize(rec.data));
+}
+
+/** Everything in the library, newest first, with the open project saved first so it is up to date. */
+export async function libraryProjects(): Promise<ProjectRecord[]> {
+  unsaved = true;
+  await autosave();
+  return listProjects();
+}
+
+export async function duplicateProject(id: string): Promise<void> {
+  const rec = await getProject(id);
+  if (rec) await putProject({ ...rec, id: newId(), name: rec.name + ' copy', updatedAt: Date.now() });
+}
+
+export async function removeProject(id: string): Promise<void> {
+  await deleteProject(id);
+  if (id !== S.projectId) return;
+  // The open project was deleted: move to the most recent other one, or a fresh blank.
+  unsaved = false;
+  clearTimeout(saveTimer);
+  const next = (await listProjects())[0];
+  activate(next?.id ?? newId(), next ? deserialize(next.data) : createPattern(60, 60));
+}
+
+export function openDialog(name: string | null): void {
+  S.dialog = name;
+  emit(false);
+}
+
+let photoPixels: { src: string; w: number; h: number; data: Uint8ClampedArray } | null = null;
+
+/** The guide photo's average color over one square, for picking exact shades from the picture. */
+export function samplePhoto(cx: number, cy: number): string | null {
+  const ref = S.pattern.reference;
+  const img = ref?.photo ? refImage(ref.photo) : null;
+  if (!ref?.photo || !img) return null;
+  if (photoPixels?.src !== ref.photo) {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    g.drawImage(img, 0, 0);
+    photoPixels = { src: ref.photo, w: c.width, h: c.height, data: g.getImageData(0, 0, c.width, c.height).data };
+  }
+  const { w, h, data } = photoPixels;
+  const x0 = Math.max(0, Math.floor(((cx - ref.rect.x) / ref.rect.w) * w)), x1 = Math.min(w, Math.ceil(((cx + 1 - ref.rect.x) / ref.rect.w) * w));
+  const y0 = Math.max(0, Math.floor(((cy - ref.rect.y) / ref.rect.h) * h)), y1 = Math.min(h, Math.ceil(((cy + 1 - ref.rect.y) / ref.rect.h) * h));
+  if (x1 <= x0 || y1 <= y0) return null;
+  let r = 0, g = 0, b = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const o = (y * w + x) * 4; r += data[o]; g += data[o + 1]; b += data[o + 2]; }
+  const n = (x1 - x0) * (y1 - y0);
+  return rgbToHex(r / n, g / n, b / n);
 }
 
 // ---- Reference pictures -------------------------------------------------

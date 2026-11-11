@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { MAX_SIZE, createPattern } from './model';
 import { renderExport } from './render';
-import { S, commitFloating, download, fileBase, resizePattern, setPattern } from './store';
+import { S, commitFloating, download, fileBase, openAsNewProject, resizePattern } from './store';
 
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode; size?: 'wide' | 'xl' }) {
   useEffect(() => {
@@ -49,13 +49,13 @@ export function NewDialog({ onClose }: { onClose: () => void }) {
         </label>
       </div>
       <SizeFields w={w} h={h} setW={setW} setH={setH} />
-      <p className="hint">Up to {MAX_SIZE} × {MAX_SIZE}. Your current pattern can be brought back with Undo.</p>
+      <p className="hint">Up to {MAX_SIZE} × {MAX_SIZE}. Your current project stays in Projects.</p>
       <footer>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button
           className="btn primary"
           disabled={!validSize(w) || !validSize(h)}
-          onClick={() => { setPattern(createPattern(w, h, name.trim() || 'Untitled pattern')); onClose(); }}
+          onClick={async () => { await openAsNewProject(createPattern(w, h, name.trim() || 'Untitled pattern')); onClose(); }}
         >
           Create
         </button>
