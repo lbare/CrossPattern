@@ -7,11 +7,13 @@ clean it up until it is something you would actually want to stitch.
 
 There is nothing to install and no account. Your patterns stay in your own browser; nothing is uploaded.
 
+![The editor showing a pattern of a kitten sniffing a plant, made from a photo](docs/editor.png)
+
 ## What it does
 
 - **Grid editor**: pencil, eraser, fill, line, rectangle, ellipse, select and move, and backstitch outlines.
-- **Picture conversion**: crop a photo to the exact stitch count you want, then mark areas to remove, flatten
-  to one color, or keep in detail before the colors are reduced.
+- **Picture conversion**: crop a photo to the exact stitch count you want, then mark areas to remove, redraw
+  as a cartoon, flatten to one color, or keep in detail before the colors are reduced. It is saved as you go.
 - **Fine-tuning**: show the original photo over the pattern, repaint single colors, tidy noisy patches, bring
   back parts of the first conversion, or re-convert just one area with different settings.
 - **Colors**: any color you like, each with a chart symbol and a live stitch count. Highlight, lock, merge,
@@ -53,10 +55,14 @@ picture in full. **Mirror** in the top bar repeats everything you paint on the o
 
 Press **Convert picture** and choose, drop or paste an image.
 
+![Marking a photo: the kitten, plant and pot are cartoon areas and the background is removed](docs/convert.png)
+
 1. **Crop and size.** Type the width and height in stitches. The crop box takes that shape; drag it or a corner
    to choose what goes in. You see the total stitch count and the finished size on your fabric count.
 2. **Areas and colors.** Paint marks on the photo to tell the converter what matters:
    - **Remove** leaves the area as empty fabric.
+   - **Cartoon** redraws an area like a drawing: lighting evened out, color strengthened, a few flat tones of
+     its own, and an optional dark outline. Mark each object as its own area.
    - **One color** turns each marked area into a single solid color.
    - **Keep detail** protects the area from simplifying and gives it priority when colors are chosen.
 
@@ -64,7 +70,15 @@ Press **Convert picture** and choose, drop or paste an image.
    "Remove everything unmarked" cuts out a background in one click once the subject is marked.
 
    Then set the number of colors, how strongly to flatten unmarked areas, and how much to clear stray stitches.
-   "Adjust the photo" changes brightness, contrast and color strength first.
+   "Adjust the photo" lifts shadows and changes brightness, contrast and color strength first.
+
+   Pinch or ⌘/Ctrl-scroll over the photo to zoom in for small features.
+
+The conversion is saved as you work: close the window or refresh the page and it is still there. A pattern
+also remembers the conversion it came from, so "Edit conversion" in the right panel reopens it later.
+
+If a photo comes out as a muddy jumble (a subject in shadow, a busy background), mark each object as a
+Cartoon area and remove the rest. That gives every object its own colors instead of making them compete.
 
 A good order for a portrait or a pet: remove the background, keep detail on eyes, nose and edges, leave fur or
 skin unmarked so it flattens, then lower the color count until it looks right.
@@ -73,6 +87,9 @@ skin unmarked so it flattens, then lower the color count until it looks right.
 
 - **Guide picture** (top of the right panel): show the photo or the first conversion over your pattern, with a
   slider to fade between the two. You can also add a photo to trace over on any pattern.
+
+  ![The original photo faded over the pattern](docs/guide-photo.jpg)
+
 - **Re-convert**: select an area and press Re-convert to convert just that part of the photo again.
 - **Lock** a color so no tool can paint over it while you work around it.
 - **Simplify**: reduce to a number of colors, remove stray stitches everywhere, or add an outline around the
@@ -84,6 +101,8 @@ skin unmarked so it flattens, then lower the color count until it looks right.
 Turn on **Stitch mode** and click or drag over squares as you finish them. They fade so that what is left
 stands out, the palette shows stitched and total counts per color, and overall progress is shown at the bottom
 of the panel. Shift-click ticks off a whole patch of one color. Progress is saved with the project.
+
+![Stitch mode with symbols: finished squares are faded and progress is counted](docs/stitch-mode.png)
 
 ### Projects, saving and printing
 
@@ -107,7 +126,8 @@ Projects are stored in your browser's IndexedDB on your own computer. That means
 - Patterns can be up to 400 × 400 stitches.
 - Full stitches and backstitch only; no half or quarter stitches.
 - Colors are free RGB colors and are not matched to thread brands.
-- It is built for a mouse or trackpad. On a phone the layout adapts, but drawing with touch is basic.
+- It is built for a mouse or trackpad. On a phone you can open a pattern, drag and pinch to look around, and
+  tick off stitches in Stitch mode; drawing and picture conversion are better on a computer.
 
 ## Running it yourself
 
@@ -136,13 +156,13 @@ It is a Vite + React + TypeScript app with no backend and no runtime dependencie
 | `src/store.ts` | App state, undo, selections, the project library, and every action the interface can take. |
 | `src/CanvasView.tsx` | The drawing surface: rendering, pointer handling, and all the tools. |
 | `src/render.ts` | Drawing a pattern to a canvas, for the screen, PNG export and print pages. |
-| `src/convert.ts` | Picture conversion: sampling, edge-preserving smoothing, k-means color reduction. |
+| `src/convert.ts` | Picture conversion: sampling, shadow lifting, edge-preserving smoothing, cartoon areas, k-means color reduction. |
 | `src/marks.ts` | The marks painted on a photo before conversion (brush, lasso, magic wand). |
 | `src/ImportDialog.tsx` | The two-step picture conversion dialog. |
 | `src/PalettePanel.tsx` | The right-hand panel: guide picture, colors, simplify tools, progress. |
 | `src/extras.tsx`, `src/dialogs.tsx`, `src/guide.tsx` | Projects, re-convert, export, resize and the built-in guide. |
 | `src/print.ts` | The multi-page printable chart. |
-| `src/db.ts` | The IndexedDB project library. |
+| `src/db.ts` | The IndexedDB project library and saved conversions. |
 
 ### Deployment
 

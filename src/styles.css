@@ -351,9 +351,28 @@ main { display: grid; grid-template-columns: 48px 1fr 264px; min-height: 0; }
   }
   .status .muted { display: none; }
   .selbar { top: 6px; }
-  .guide { grid-template-columns: 1fr; height: 70vh; }
+  .guide { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: 70vh; }
+  .guide nav { min-width: 0; }
   .guide nav { flex-direction: row; overflow-x: auto; flex: none; }
   .guide nav button { white-space: nowrap; }
   .areas { grid-template-columns: 1fr; }
   .areas figure:last-of-type { grid-column: auto; }
 }
+
+/* ---- Conversion: wrapped mode buttons, zoomable marking view, saved note ---- */
+.seg.wrap { flex-wrap: wrap; }
+.seg.wrap button { flex: 1 0 30%; border-top: 1px solid var(--border); margin-top: -1px; }
+.steps .saved { margin-left: auto; align-self: center; color: var(--muted); font-size: 12px; padding-right: 4px; }
+.loading { padding: 40px 18px; text-align: center; }
+.zoomwrap { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.zoomwrap .mark-canvas { transform-origin: 0 0; }
+.zoombar {
+  position: absolute; right: 8px; bottom: 8px; display: flex; border-radius: 7px; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.zoombar button { border: 0; background: none; height: 26px; min-width: 28px; padding: 0 8px; cursor: pointer; font-size: 12px; color: var(--text); }
+.zoombar button + button { border-left: 1px solid var(--border); }
+.zoombar button:disabled { color: var(--muted); cursor: default; }
+@media (max-width: 760px) { .steps .saved { display: none; } }
+
+.guide .shot { display: block; width: 100%; max-width: 74ch; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 16px; }

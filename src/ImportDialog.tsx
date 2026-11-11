@@ -2,13 +2,14 @@ import { PointerEvent as RPointerEvent, useDeferredValue, useEffect, useMemo, us
 import { clamp } from './color';
 import { quantize, resultToImageData, sampleImage } from './convert';
 import { Modal } from './dialogs';
+import { ConversionRecord, DRAFT, deleteConversion, getConversion, putConversion } from './db';
 import {
-  Base, Crop, DETAIL, FLAT0, LabelMap, NONE, REMOVE, compose, fillPolygon, fillUnmarked, labelSize, makeBase,
-  makeLabels, nextFlatId, remapLabels, stamp, stampLine, wand,
+  Base, CARTOON0, Crop, DETAIL, FLAT0, LabelMap, NONE, REMOVE, compose, fillPolygon, fillUnmarked, makeBase,
+  makeLabels, nextCartoonId, nextFlatId, remapLabels, stamp, stampLine, wand,
 } from './marks';
 import { MAX_SIZE, paletteFromHexes } from './model';
 import { FABRIC } from './render';
-import { openAsNewProject, photoDataUrl } from './store';
+import { S, openAsNewProject, photoDataUrl, setPattern } from './store';
 
 function loadImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -47,9 +48,9 @@ function Slider(props: { label: string; value: number; min: number; max: number;
   );
 }
 
-function Segmented<T extends string>(props: { value: T; options: [T, string][]; set: (v: T) => void }) {
+function Segmented<T extends string>(props: { value: T; options: [T, string][]; set: (v: T) => void; wrap?: boolean }) {
   return (
-    <div className="seg">
+    <div className={'seg' + (props.wrap ? ' wrap' : '')}>
       {props.options.map(([v, label]) => (
         <button key={v} className={v === props.value ? 'on' : ''} onClick={() => props.set(v)}>{label}</button>
       ))}
@@ -117,15 +118,18 @@ function CropBox(props: { img: HTMLImageElement; crop: Crop; aspect: number; onC
 
 // ---- Step 2: mark areas -------------------------------------------------
 
-type Mode = 'detail' | 'flat' | 'remove' | 'erase';
+type Mode = 'remove' | 'cartoon' | 'flat' | 'detail' | 'erase';
 type MarkTool = 'brush' | 'lasso' | 'wand';
 
 const MODE_HELP: Record<Mode, string> = {
-  detail: 'Protected from simplifying, and given priority when colors are chosen. Use on eyes, nose and edges that must stay crisp.',
-  flat: 'Each area you mark becomes one solid color. Start inside an existing area to add to it.',
   remove: 'Left as empty fabric. Use for the background so the subject keeps a clean outline.',
+  cartoon: 'Redrawn like a drawing: lighting evened out and reduced to a few flat tones of its own. Mark each object (the cat, the plant) as a separate area.',
+  flat: 'Each area you mark becomes one solid color. Start inside an existing area to add to it.',
+  detail: 'Protected from simplifying, and given priority when colors are chosen. Use on eyes, nose and edges that must stay crisp.',
   erase: 'Clears marks, returning the area to normal conversion.',
 };
+
+interface View { z: number; x: number; y: number }
 
 function MarkCanvas(props: {
   base: Base; labels: LabelMap; mode: Mode; tool: MarkTool; brush: number; tol: number; version: number;
@@ -133,10 +137,39 @@ function MarkCanvas(props: {
 }) {
   const { base, labels, mode, tool, brush } = props;
   const ref = useRef<HTMLCanvasElement>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<View>({ z: 1, x: 0, y: 0 });
   const st = useRef({
     drawing: false, label: 0, lx: 0, ly: 0, pts: [] as [number, number][], hover: null as [number, number] | null,
-    out: null as ImageData | null,
+    out: null as ImageData | null, pan: null as { sx: number; sy: number; x: number; y: number } | null,
   });
+
+  /** Keeps the picture covering the box: no zooming out past 1 and no dragging it off the edge. */
+  const fix = (v: View): View => {
+    const r = wrap.current!.getBoundingClientRect(), z = clamp(v.z, 1, 8);
+    return { z, x: clamp(v.x, r.width * (1 - z), 0), y: clamp(v.y, r.height * (1 - z), 0) };
+  };
+  const zoomAt = (v: View, cx: number, cy: number, factor: number): View => {
+    const z = clamp(v.z * factor, 1, 8);
+    return fix({ z, x: cx - ((cx - v.x) * z) / v.z, y: cy - ((cy - v.y) * z) / v.z });
+  };
+  const zoomBy = (factor: number) => {
+    const r = wrap.current!.getBoundingClientRect();
+    setView((v) => zoomAt(v, r.width / 2, r.height / 2, factor));
+  };
+
+  useEffect(() => {
+    const el = wrap.current!;
+    // Pinch or ⌘/Ctrl-scroll zooms toward the cursor; plain scrolling moves around when zoomed in.
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
+      setView((v) => (e.ctrlKey || e.metaKey ? zoomAt(v, cx, cy, Math.exp(-e.deltaY * 0.01)) : fix({ z: v.z, x: v.x - e.deltaX, y: v.y - e.deltaY })));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const paint = () => {
     const c = ref.current;
@@ -146,8 +179,8 @@ function MarkCanvas(props: {
     compose(base, labels, s.out);
     g.putImageData(s.out, 0, 0);
     const outline = (draw: () => void) => {
-      g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.7)'; draw();
-      g.lineWidth = 1.25; g.strokeStyle = '#fff'; draw();
+      g.lineWidth = 3 / view.z; g.strokeStyle = 'rgba(0,0,0,0.7)'; draw();
+      g.lineWidth = 1.25 / view.z; g.strokeStyle = '#fff'; draw();
     };
     if (s.pts.length > 1) {
       outline(() => {
@@ -162,7 +195,7 @@ function MarkCanvas(props: {
     }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(paint, [base, labels, props.version, tool, brush]);
+  useEffect(paint, [base, labels, props.version, tool, brush, view.z]);
 
   const at = (e: RPointerEvent): [number, number] => {
     const r = ref.current!.getBoundingClientRect();
@@ -174,13 +207,20 @@ function MarkCanvas(props: {
     if (mode === 'erase') return NONE;
     const ix = clamp(Math.floor(x), 0, labels.w - 1), iy = clamp(Math.floor(y), 0, labels.h - 1);
     const under = labels.data[iy * labels.w + ix];
-    return under >= FLAT0 ? under : nextFlatId(labels);
+    // Starting on an area of the same kind adds to it; starting anywhere else begins a new area.
+    if (mode === 'cartoon') return under >= CARTOON0 ? under : nextCartoonId(labels);
+    return under >= FLAT0 && under < CARTOON0 ? under : nextFlatId(labels);
   };
 
   const down = (e: RPointerEvent) => {
-    if (e.button !== 0) return;
-    const [x, y] = at(e), s = st.current;
+    const s = st.current;
     ref.current!.setPointerCapture(e.pointerId);
+    if (e.button === 1 || e.button === 2 || e.altKey) {
+      s.pan = { sx: e.clientX, sy: e.clientY, x: view.x, y: view.y };
+      return;
+    }
+    if (e.button !== 0) return;
+    const [x, y] = at(e);
     props.onBefore();
     s.label = labelAt(x, y);
     if (tool === 'wand') {
@@ -195,7 +235,13 @@ function MarkCanvas(props: {
     paint();
   };
   const move = (e: RPointerEvent) => {
-    const [x, y] = at(e), s = st.current;
+    const s = st.current;
+    if (s.pan) {
+      const p = s.pan;
+      setView((v) => fix({ z: v.z, x: p.x + e.clientX - p.sx, y: p.y + e.clientY - p.sy }));
+      return;
+    }
+    const [x, y] = at(e);
     s.hover = [x, y];
     if (s.drawing) {
       if (tool === 'brush') stampLine(labels, s.lx, s.ly, x, y, brush, s.label);
@@ -206,6 +252,7 @@ function MarkCanvas(props: {
   };
   const up = () => {
     const s = st.current;
+    s.pan = null;
     if (!s.drawing) return;
     if (tool === 'lasso' && s.pts.length > 2) fillPolygon(labels, s.pts, s.label);
     s.drawing = false;
@@ -215,24 +262,48 @@ function MarkCanvas(props: {
   };
 
   return (
-    <canvas
-      ref={ref}
-      className="mark-canvas"
-      width={labels.w}
-      height={labels.h}
-      onPointerDown={down}
-      onPointerMove={move}
-      onPointerUp={up}
-      onPointerCancel={up}
-      onPointerLeave={() => { st.current.hover = null; paint(); }}
-    />
+    <div className="zoomwrap" ref={wrap}>
+      <canvas
+        ref={ref}
+        className="mark-canvas"
+        style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
+        width={labels.w}
+        height={labels.h}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+        onPointerLeave={() => { st.current.hover = null; paint(); }}
+        onContextMenu={(e) => e.preventDefault()}
+      />
+      <div className="zoombar">
+        <button onClick={() => zoomBy(1 / 1.5)} disabled={view.z <= 1} title="Zoom out">−</button>
+        <button onClick={() => setView({ z: 1, x: 0, y: 0 })} disabled={view.z <= 1} title="Show the whole picture">{Math.round(view.z * 100)}%</button>
+        <button onClick={() => zoomBy(1.5)} disabled={view.z >= 8} title="Zoom in">+</button>
+      </div>
+    </div>
   );
 }
 
 // ---- The dialog ---------------------------------------------------------
 
-export function ImportDialog({ onClose, initialFile }: { onClose: () => void; initialFile?: File | null }) {
+const DEFAULTS = {
+  colors: 10, smooth: 2, clean: 1, brightness: 0, contrast: 0, saturation: 0, lift: 0, tones: 3, outline: true, evenLight: true,
+};
+type Settings = typeof DEFAULTS;
+
+/** Remembered across a refresh so an unfinished conversion reopens by itself. */
+export const CONVERTING_KEY = 'crosspattern.converting';
+
+/**
+ * Converts a picture into a pattern. Everything done here is saved as it happens, so closing the dialog
+ * or refreshing the page loses nothing. With `edit`, it reopens the conversion the current project was
+ * made from and updates that project instead of making a new one.
+ */
+export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => void; initialFile?: File | null; edit?: boolean }) {
+  const key = edit ? S.projectId : DRAFT;
   const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [step, setStep] = useState<'crop' | 'areas'>('crop');
@@ -241,33 +312,36 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
   const [h, setH] = useState(80);
   const [crop, setCrop] = useState<Crop>({ x: 0, y: 0, w: 1, h: 1 });
   const [fabric, setFabric] = useState(14);
-
-  const [colors, setColors] = useState(10);
-  const [smooth, setSmooth] = useState(2);
-  const [clean, setClean] = useState(1);
-  const [brightness, setBrightness] = useState(0);
-  const [contrast, setContrast] = useState(0);
-  const [saturation, setSaturation] = useState(0);
+  const [set, setSet] = useState<Settings>(DEFAULTS);
+  const change = (patch: Partial<Settings>) => setSet((s) => ({ ...s, ...patch }));
 
   const [mode, setMode] = useState<Mode>('remove');
   const [tool, setTool] = useState<MarkTool>('brush');
   const [brush, setBrush] = useState(16);
   const [tol, setTol] = useState(30);
+  const blob = useRef<Blob | null>(null);
   const marks = useRef<{ labels: LabelMap; crop: Crop } | null>(null);
   const history = useRef<Uint8Array[]>([]);
   const [version, setVersion] = useState(0);
   const bump = () => setVersion((v) => v + 1);
   const out = useRef<HTMLCanvasElement>(null);
 
+  const close = () => {
+    try { sessionStorage.removeItem(CONVERTING_KEY); } catch { /* blocked */ }
+    onClose();
+  };
+
   const take = async (file?: Blob | null, fileName = '') => {
     if (!file) return;
     try {
       const im = await loadImage(file);
       const nh = clamp(Math.round((80 * im.naturalHeight) / im.naturalWidth), 1, MAX_SIZE);
+      blob.current = file;
       setImg(im);
       setW(80);
       setH(nh);
       setCrop(cropForAspect(im, 80 / nh));
+      setSet(DEFAULTS);
       marks.current = null;
       history.current = [];
       setStep('crop');
@@ -283,8 +357,31 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
     if (prev && marks.current) { marks.current.labels.data.set(prev); bump(); }
   };
 
+  // On opening: a dropped picture starts fresh; otherwise pick up the saved conversion, if there is one.
   useEffect(() => {
-    if (initialFile) take(initialFile, initialFile.name);
+    try { sessionStorage.setItem(CONVERTING_KEY, edit ? 'edit' : 'new'); } catch { /* blocked */ }
+    (async () => {
+      if (initialFile) {
+        await take(initialFile, initialFile.name);
+      } else {
+        try {
+          const rec = await getConversion(key);
+          if (rec) {
+            const im = await loadImage(rec.photo);
+            blob.current = rec.photo;
+            marks.current = rec.labels && { labels: { w: rec.labels.w, h: rec.labels.h, data: rec.labels.data }, crop: rec.labels.crop };
+            setImg(im);
+            setName(rec.name);
+            setW(rec.w);
+            setH(rec.h);
+            setCrop(rec.crop);
+            setSet({ ...DEFAULTS, ...(rec.settings as Partial<Settings>) });
+            setStep(rec.labels ? rec.step : 'crop');
+          }
+        } catch { /* nothing saved, or the library is unavailable */ }
+      }
+      setLoading(false);
+    })();
     const onPaste = (e: ClipboardEvent) => {
       const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith('image/'));
       if (item) take(item.getAsFile(), 'Pasted image');
@@ -300,6 +397,37 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Save the conversion shortly after anything changes, and straight away when the dialog goes.
+  const record = (): ConversionRecord | null =>
+    blob.current && {
+      photo: blob.current, name, w, h, crop, step,
+      labels: marks.current && { ...marks.current.labels, crop: marks.current.crop },
+      settings: set, updatedAt: Date.now(),
+    };
+  const latest = useRef(record);
+  latest.current = record;
+  useEffect(() => {
+    if (loading || !img) return;
+    let pending = true;
+    const save = () => {
+      if (!pending) return;
+      pending = false;
+      const rec = latest.current();
+      if (rec) putConversion(key, rec).catch(() => {});
+    };
+    const t = setTimeout(save, 400);
+    return () => { clearTimeout(t); save(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, img, name, w, h, crop, step, version, set]);
+
+  const startOver = () => {
+    deleteConversion(key).catch(() => {});
+    blob.current = null;
+    marks.current = null;
+    history.current = [];
+    setImg(null);
+  };
 
   const sizeOk = validSize(w) && validSize(h);
 
@@ -337,12 +465,9 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
     [img, labels, version, w, h],
   );
   // Sliders stay responsive while the conversion catches up.
-  const dColors = useDeferredValue(colors), dSmooth = useDeferredValue(smooth), dClean = useDeferredValue(clean);
-  const dBright = useDeferredValue(brightness), dContrast = useDeferredValue(contrast), dSat = useDeferredValue(saturation);
-  const result = useMemo(
-    () => (sampled ? quantize(sampled, { colors: dColors, smooth: dSmooth, clean: dClean, brightness: dBright, contrast: dContrast, saturation: dSat }) : null),
-    [sampled, dColors, dSmooth, dClean, dBright, dContrast, dSat],
-  );
+  const dSet = useDeferredValue(set);
+  const result = useMemo(() => (sampled ? quantize(sampled, dSet) : null), [sampled, dSet]);
+  const hasCartoon = useMemo(() => !!sampled && sampled.label.some((l) => l >= CARTOON0), [sampled]);
 
   useEffect(() => {
     const c = out.current;
@@ -352,7 +477,7 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
     c.getContext('2d')!.putImageData(resultToImageData(result), 0, 0);
   }, [result, step]);
 
-  const edit = (fn: (m: LabelMap) => void) => {
+  const edit_ = (fn: (m: LabelMap) => void) => {
     if (!labels) return;
     pushHistory();
     fn(labels);
@@ -364,9 +489,9 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
     if (history.current.length > 40) history.current.shift();
   };
 
-  const create = () => {
+  const create = async () => {
     if (!result) return;
-    openAsNewProject({
+    const pattern = {
       name: name || 'Imported pattern',
       width: result.width,
       height: result.height,
@@ -379,8 +504,14 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
         rect: { x: 0, y: 0, w: result.width, h: result.height },
         converted: { width: result.width, height: result.height, hexes: result.palette, cells: result.cells.slice() },
       },
-    });
-    onClose();
+    };
+    if (edit) setPattern(pattern);
+    else await openAsNewProject(pattern);
+    // The conversion now belongs to the project it made, so it can be reopened and changed later.
+    const rec = record();
+    if (rec) putConversion(S.projectId, rec).catch(() => {});
+    if (!edit) deleteConversion(DRAFT).catch(() => {});
+    close();
   };
 
   const stitches = result ? result.cells.reduce((n, v) => n + (v ? 1 : 0), 0) : 0;
@@ -390,10 +521,17 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
       <input type="file" accept="image/*" hidden onChange={(e) => take(e.target.files?.[0], e.target.files?.[0]?.name)} />
     </label>
   );
+  const fillLabel = (m: LabelMap) => (mode === 'remove' ? REMOVE : mode === 'detail' ? DETAIL : mode === 'cartoon' ? nextCartoonId(m) : nextFlatId(m));
+  const FILL_TEXT: Record<Mode, string> = {
+    remove: 'Remove everything unmarked', cartoon: 'Make everything unmarked one cartoon area',
+    flat: 'Make everything unmarked one color', detail: 'Keep detail everywhere unmarked', erase: '',
+  };
+  const adjusted = set.brightness || set.contrast || set.saturation || set.lift;
 
   return (
-    <Modal title="Convert a picture" onClose={onClose} size={img ? 'xl' : 'wide'}>
-      {!img && (
+    <Modal title={edit ? 'Edit conversion' : 'Convert a picture'} onClose={close} size={img ? 'xl' : 'wide'}>
+      {loading && <p className="hint loading">Loading…</p>}
+      {!loading && !img && (
         <label
           className="drop"
           onDragOver={(e) => e.preventDefault()}
@@ -402,6 +540,7 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
           <input type="file" accept="image/*" hidden onChange={(e) => take(e.target.files?.[0], e.target.files?.[0]?.name)} />
           <strong>Choose a picture</strong>
           <span>or drop one here, or paste from the clipboard</span>
+          {edit && <span>The conversion for this project was not saved, so start from the picture again.</span>}
           {error && <span className="error">{error}</span>}
         </label>
       )}
@@ -410,6 +549,7 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
         <ol className="steps">
           <li className={step === 'crop' ? 'on' : ''}><button onClick={() => setStep('crop')}>1. Crop and size</button></li>
           <li className={step === 'areas' ? 'on' : ''}><button disabled={!sizeOk} onClick={goAreas}>2. Areas and colors</button></li>
+          <li className="saved">Saved as you go. Closing or refreshing keeps your work.</li>
         </ol>
       )}
 
@@ -446,14 +586,17 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
                 <button className="btn small" onClick={() => changeSize(h, w)}>Swap width and height</button>
                 <button className="btn small" onClick={wholePhoto} title="Sets the height so the whole photo fits">Use whole photo</button>
               </div>
-              {filePicker('Choose a different picture', 'pick-other btn small')}
+              <div className="row">
+                {filePicker('Choose a different picture', 'btn small')}
+                {!edit && <button className="btn small danger" title="Throws away this conversion" onClick={startOver}>Start over</button>}
+              </div>
             </div>
             <div className="stage">
               <CropBox img={img} crop={crop} aspect={sizeOk ? w / h : crop.w / crop.h} onChange={setCrop} />
             </div>
           </div>
           <footer>
-            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className="btn" onClick={close}>Close</button>
             <button className="btn primary" disabled={!sizeOk} onClick={goAreas}>Next: areas and colors</button>
           </footer>
         </>
@@ -466,13 +609,14 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
               <div className="block">
                 <h3>Mark areas on the photo</h3>
                 <Segmented
+                  wrap
                   value={mode}
                   set={setMode}
-                  options={[['remove', 'Remove'], ['flat', 'One color'], ['detail', 'Keep detail'], ['erase', 'Unmark']]}
+                  options={[['remove', 'Remove'], ['cartoon', 'Cartoon'], ['flat', 'One color'], ['detail', 'Keep detail'], ['erase', 'Unmark']]}
                 />
                 <p className="hint mode-help">{MODE_HELP[mode]}</p>
                 <Segmented value={tool} set={setTool} options={[['brush', 'Brush'], ['lasso', 'Lasso'], ['wand', 'Magic wand']]} />
-                {tool === 'brush' && <Slider label="Brush size" value={brush} min={3} max={60} set={setBrush} />}
+                {tool === 'brush' && <Slider label="Brush size" value={brush} min={2} max={60} set={setBrush} />}
                 {tool === 'lasso' && <p className="hint">Draw around an area; everything inside is marked.</p>}
                 {tool === 'wand' && (
                   <Slider label="Tolerance" value={tol} min={2} max={100} set={setTol}
@@ -480,31 +624,46 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
                 )}
                 <div className="row">
                   <button className="btn small" disabled={!history.current.length} onClick={undoMark}>Undo</button>
-                  <button className="btn small" onClick={() => edit((m) => m.data.fill(NONE))}>Clear all</button>
+                  <button className="btn small" onClick={() => edit_((m) => m.data.fill(NONE))}>Clear all</button>
                 </div>
                 {mode !== 'erase' && (
                   <button
                     className="btn small"
                     title="Applies the chosen mark to everything you have not marked yet"
-                    onClick={() => edit((m) => fillUnmarked(m, mode === 'remove' ? REMOVE : mode === 'detail' ? DETAIL : nextFlatId(m)))}
+                    onClick={() => edit_((m) => fillUnmarked(m, fillLabel(m)))}
                   >
-                    {mode === 'remove' ? 'Remove everything unmarked' : mode === 'detail' ? 'Keep detail everywhere unmarked' : 'Make everything unmarked one color'}
+                    {FILL_TEXT[mode]}
                   </button>
                 )}
               </div>
+              {(hasCartoon || mode === 'cartoon') && (
+                <div className="block">
+                  <h3>Cartoon areas</h3>
+                  <Slider label="Tones per area" value={set.tones} min={2} max={6} set={(n) => change({ tones: n })}
+                    hint="Each cartoon area gets this many colors of its own." />
+                  <label className="check">
+                    <input type="checkbox" checked={set.outline} onChange={(e) => change({ outline: e.target.checked })} /> Dark outline around each area
+                  </label>
+                  <label className="check">
+                    <input type="checkbox" checked={set.evenLight} onChange={(e) => change({ evenLight: e.target.checked })} /> Brighten areas that are in shadow
+                  </label>
+                </div>
+              )}
               <div className="block">
                 <h3>Colors and simplifying</h3>
-                <Slider label="Colors" value={colors} min={2} max={40} set={setColors}
-                  hint={result ? `${result.palette.length} colors used` : undefined} />
-                <Slider label="Flatten unmarked areas" value={smooth} min={0} max={4} set={setSmooth}
+                <Slider label={hasCartoon ? 'Colors for the rest' : 'Colors'} value={set.colors} min={2} max={40} set={(n) => change({ colors: n })}
+                  hint={result ? `${result.palette.length} colors in the pattern` : undefined} />
+                <Slider label="Flatten unmarked areas" value={set.smooth} min={0} max={4} set={(n) => change({ smooth: n })}
                   hint="Smooths texture and shading. Keep-detail areas are not touched." />
-                <Slider label="Remove stray stitches" value={clean} min={0} max={3} set={setClean} />
+                <Slider label="Remove stray stitches" value={set.clean} min={0} max={3} set={(n) => change({ clean: n })} />
                 <details className="adjust">
-                  <summary>Adjust the photo{brightness || contrast || saturation ? ' (changed)' : ''}</summary>
-                  <Slider label="Brightness" value={brightness} min={-100} max={100} set={setBrightness} />
-                  <Slider label="Contrast" value={contrast} min={-100} max={100} set={setContrast} />
-                  <Slider label="Color strength" value={saturation} min={-100} max={100} set={setSaturation} />
-                  <button className="btn small" onClick={() => { setBrightness(0); setContrast(0); setSaturation(0); }}>Reset</button>
+                  <summary>Adjust the photo{adjusted ? ' (changed)' : ''}</summary>
+                  <Slider label="Lift shadows" value={set.lift} min={0} max={100} set={(n) => change({ lift: n })}
+                    hint="Brightens dark parts and brings their color back." />
+                  <Slider label="Brightness" value={set.brightness} min={-100} max={100} set={(n) => change({ brightness: n })} />
+                  <Slider label="Contrast" value={set.contrast} min={-100} max={100} set={(n) => change({ contrast: n })} />
+                  <Slider label="Color strength" value={set.saturation} min={-100} max={100} set={(n) => change({ saturation: n })} />
+                  <button className="btn small" onClick={() => change({ lift: 0, brightness: 0, contrast: 0, saturation: 0 })}>Reset</button>
                 </details>
               </div>
             </div>
@@ -515,7 +674,7 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
                   onBefore={pushHistory} onChange={bump}
                 />
               </div>
-              <figcaption>Photo: paint here to mark areas</figcaption>
+              <figcaption>Photo: paint to mark areas. Pinch or ⌘/Ctrl-scroll to zoom, scroll or Alt-drag to move.</figcaption>
             </figure>
             <figure>
               <div className="fit" style={{ ...fitStyle(w / h, 56), background: FABRIC }}>
@@ -525,9 +684,11 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
             </figure>
           </div>
           <footer>
-            <span className="hint grow">Opens as a new project. Your current one stays in Projects.</span>
+            <span className="hint grow">
+              {edit ? 'Replaces this project\'s pattern, including edits made since. Undo brings it back.' : 'Opens as a new project. Your current one stays in Projects.'}
+            </span>
             <button className="btn" onClick={() => setStep('crop')}>Back</button>
-            <button className="btn primary" disabled={!result?.palette.length} onClick={create}>Create pattern</button>
+            <button className="btn primary" disabled={!result?.palette.length} onClick={create}>{edit ? 'Update pattern' : 'Create pattern'}</button>
           </footer>
         </>
       )}

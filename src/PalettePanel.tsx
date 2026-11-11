@@ -3,7 +3,7 @@ import { inkFor } from './color';
 import { SYMBOLS, countCells } from './model';
 import { FABRIC } from './render';
 import {
-  RefMode, S, addColor, addOutline, deleteColor, emit, loadReferencePhoto, mergeInto, reduceTo, removeReference,
+  RefMode, S, addColor, openDialog, addOutline, deleteColor, emit, loadReferencePhoto, mergeInto, reduceTo, removeReference,
   clearProgress, removeStrays, removeUnusedColors, setColorHex, setColorSymbol, setFabric, sortPaletteByUse, toggleLock,
   useStore,
 } from './store';
@@ -60,6 +60,17 @@ function ReferenceSection() {
             {picker(ref.photo ? 'Change photo' : 'Add photo')}
             <button className="btn small" onClick={removeReference}>Remove guide</button>
           </div>
+          {ref.converted && (
+            <div className="editor-row">
+              <button
+                className="btn small"
+                title="Reopen the picture conversion this pattern came from, with its crop, marks and settings"
+                onClick={() => openDialog('reimport')}
+              >
+                Edit conversion…
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>

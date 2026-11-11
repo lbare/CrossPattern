@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CanvasView } from './CanvasView';
-import { ImportDialog } from './ImportDialog';
+import { CONVERTING_KEY, ImportDialog } from './ImportDialog';
 import { PalettePanel } from './PalettePanel';
 import { ExportDialog, NewDialog, ResizeDialog } from './dialogs';
 import { ProjectsDialog, ReconvertDialog } from './extras';
@@ -104,9 +104,14 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKeyUp);
+    // On a phone the natural first thing is to look around, not to draw.
+    if (window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 760) setTool('pan');
     // First visit: open the guide once so new people know where to start.
     try {
-      if (!localStorage.getItem('crosspattern.seenGuide')) {
+      // A conversion that was open when the page was refreshed reopens where it left off.
+      const converting = sessionStorage.getItem(CONVERTING_KEY);
+      if (converting) openDialog(converting === 'edit' ? 'reimport' : 'import');
+      else if (!localStorage.getItem('crosspattern.seenGuide')) {
         localStorage.setItem('crosspattern.seenGuide', '1');
         openDialog('help');
       }
@@ -245,6 +250,7 @@ export function App() {
       {dialog === 'import' && (
         <ImportDialog initialFile={S.droppedFile} onClose={() => { S.droppedFile = null; setDialog(null); }} />
       )}
+      {dialog === 'reimport' && <ImportDialog edit onClose={() => setDialog(null)} />}
       {dialog === 'projects' && <ProjectsDialog onClose={() => setDialog(null)} />}
       {dialog === 'reconvert' && <ReconvertDialog onClose={() => setDialog(null)} />}
       {dialog === 'help' && <GuideDialog onClose={() => setDialog(null)} />}

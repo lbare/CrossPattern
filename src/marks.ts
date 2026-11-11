@@ -3,9 +3,10 @@ import { rgbToOklab } from './color';
 /**
  * Marks painted over a photo before it is converted. Every pixel of the label map holds one value:
  * NONE (convert normally), REMOVE (leave as empty fabric), DETAIL (protect from simplifying),
- * or FLAT0 and up, where each distinct value is one area that becomes a single solid color.
+ * FLAT0 up to CARTOON0, where each distinct value is one area that becomes a single solid color,
+ * or CARTOON0 and up, where each distinct value is one area redrawn in a few flat tones of its own.
  */
-export const NONE = 0, REMOVE = 1, DETAIL = 2, FLAT0 = 3;
+export const NONE = 0, REMOVE = 1, DETAIL = 2, FLAT0 = 3, CARTOON0 = 128;
 
 export interface Crop { x: number; y: number; w: number; h: number }
 export interface LabelMap { w: number; h: number; data: Uint8Array }
@@ -67,7 +68,14 @@ export function makeBase(img: HTMLImageElement, crop: Crop, w: number, h: number
 export function nextFlatId(m: LabelMap): number {
   const used = new Uint8Array(256);
   for (let i = 0; i < m.data.length; i++) used[m.data[i]] = 1;
-  for (let id = FLAT0; id < 256; id++) if (!used[id]) return id;
+  for (let id = FLAT0; id < CARTOON0; id++) if (!used[id]) return id;
+  return CARTOON0 - 1;
+}
+
+export function nextCartoonId(m: LabelMap): number {
+  const used = new Uint8Array(256);
+  for (let i = 0; i < m.data.length; i++) used[m.data[i]] = 1;
+  for (let id = CARTOON0; id < 256; id++) if (!used[id]) return id;
   return 255;
 }
 
@@ -135,13 +143,13 @@ export function fillUnmarked(m: LabelMap, label: number): void {
   for (let i = 0; i < m.data.length; i++) if (m.data[i] === NONE) m.data[i] = label;
 }
 
-/** Draws the photo with its marks: removed areas as a checkerboard, solid areas in their final color, detail areas tinted. */
+/** Draws the photo with its marks: removed areas as a checkerboard, solid areas in their final color, detail and cartoon areas tinted. */
 export function compose(base: Base, m: LabelMap, out: ImageData): void {
   const src = base.image.data, dst = out.data, n = m.w * m.h;
   const sums = new Float64Array(256 * 4);
   for (let i = 0; i < n; i++) {
     const l = m.data[i];
-    if (l < FLAT0) continue;
+    if (l < FLAT0 || l >= CARTOON0) continue;
     sums[l * 4] += src[i * 4]; sums[l * 4 + 1] += src[i * 4 + 1]; sums[l * 4 + 2] += src[i * 4 + 2]; sums[l * 4 + 3]++;
   }
   for (let i = 0; i < n; i++) {
@@ -153,6 +161,11 @@ export function compose(base: Base, m: LabelMap, out: ImageData): void {
       r = r * 0.12 + v * 0.88; g = g * 0.12 + v * 0.88; b = b * 0.12 + v * 0.88;
     } else if (l === DETAIL) {
       r = r * 0.84 + 30 * 0.16; g = g * 0.84 + 210 * 0.16; b = b * 0.84 + 130 * 0.16;
+    } else if (l >= CARTOON0) {
+      // Each cartoon area gets its own tint so neighbouring areas can be told apart.
+      const hue = ((l - CARTOON0) * 137.5 + 300) % 360, k = 0.2;
+      const f = (n: number) => { const t = (n + hue / 30) % 12; return 255 * (0.6 - 0.4 * Math.max(-1, Math.min(t - 3, 9 - t, 1))); };
+      r = r * (1 - k) + f(0) * k; g = g * (1 - k) + f(8) * k; b = b * (1 - k) + f(4) * k;
     } else if (l >= FLAT0) {
       const c = sums[l * 4 + 3];
       r = sums[l * 4] / c; g = sums[l * 4 + 1] / c; b = sums[l * 4 + 2] / c;

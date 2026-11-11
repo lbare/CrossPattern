@@ -5,7 +5,7 @@ import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
   S, Tool, addColor, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, doneMap, dropUndo, emit,
   fitView, keys, liftSelection, lockedIds, openDialog, pushUndo, refImage, samplePhoto, selectedRect, subscribe, transformSelection,
-  useStore, zoomAt,
+  undo, useStore, zoomAt,
 } from './store';
 
 type CellFn = (x: number, y: number) => void;
@@ -265,9 +265,29 @@ export function CanvasView() {
       emit();
     };
 
+    // Touch: two fingers always pinch-zoom and move the view, whatever tool is chosen.
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch: { dist: number; cx: number; cy: number } | null = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()], r = canvas.getBoundingClientRect();
+      return { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2 - r.left, cy: (a.y + b.y) / 2 - r.top };
+    };
+
     const down = (e: PointerEvent) => {
       const c = pos(e), p = S.pattern;
       canvas.setPointerCapture(e.pointerId);
+      if (e.pointerType === 'touch') {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) {
+          // The first finger may have started a stroke; take it back, it was the start of a pinch.
+          if (drag?.mode === 'paint' || drag?.mode === 'done') undo();
+          drag = null;
+          preview = null;
+          pinch = pinchState();
+          return;
+        }
+        if (touches.size > 2) return;
+      }
       if (e.button === 1 || (e.button === 0 && (S.tool === 'pan' || keys.space))) {
         drag = { mode: 'pan', px: e.clientX, py: e.clientY, ox: S.view.ox, oy: S.view.oy };
         canvas.style.cursor = 'grabbing';
@@ -377,6 +397,17 @@ export function CanvasView() {
     const status = document.getElementById('status-pos');
 
     const move = (e: PointerEvent) => {
+      if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && touches.size === 2) {
+          const now = pinchState();
+          S.view.ox += Math.round(now.cx - pinch.cx);
+          S.view.oy += Math.round(now.cy - pinch.cy);
+          zoomAt(now.cx, now.cy, now.dist / pinch.dist);
+          pinch = now;
+          return;
+        }
+      }
       const c = pos(e), p = S.pattern;
       hover = { x: c.fx, y: c.fy };
       if (status) status.textContent = inside(c.x, c.y) ? `${c.x + 1}, ${c.y + 1}` : '';
@@ -440,7 +471,12 @@ export function CanvasView() {
       }
     };
 
-    const up = () => {
+    const up = (e?: PointerEvent) => {
+      if (e) touches.delete(e.pointerId);
+      if (pinch) {
+        if (touches.size < 2) pinch = null;
+        return;
+      }
       const p = S.pattern;
       if (drag?.mode === 'shape' && preview) {
         const pv = preview;

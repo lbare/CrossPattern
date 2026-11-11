@@ -1,6 +1,6 @@
 import { oklabToRgb, rgbToHex, rgbToOklab } from './color';
 import { despeckle } from './model';
-import { Crop, DETAIL, FLAT0, LabelMap, NONE, REMOVE } from './marks';
+import { CARTOON0, Crop, DETAIL, FLAT0, LabelMap, NONE, REMOVE } from './marks';
 
 /** A picture shrunk to one pixel per stitch, held in Oklab so color math matches what the eye sees. */
 export interface Sampled {
@@ -11,11 +11,12 @@ export interface Sampled {
   B: Float32Array;
   /** 1 where there will be a stitch, 0 where the fabric stays empty (transparent or marked for removal). */
   mask: Uint8Array;
-  /** The mark covering most of each stitch: NONE, REMOVE, DETAIL or a solid-area id. */
+  /** The mark covering most of each stitch: NONE, REMOVE, DETAIL, a solid-area id or a cartoon-area id. */
   label: Uint8Array;
 }
 
 export interface ConvertOptions {
+  /** Colors for everything that is not a cartoon area. */
   colors: number;
   /** 0-4: how strongly to flatten texture and shading before picking colors. */
   smooth: number;
@@ -25,18 +26,39 @@ export interface ConvertOptions {
   brightness?: number;
   contrast?: number;
   saturation?: number;
+  /** 0-100: brightens dark parts of the photo and brings their color back, leaving light parts alone. */
+  lift?: number;
+  /** Flat tones each cartoon area is reduced to (2-6). */
+  tones?: number;
+  /** Draw a dark one-stitch outline around each cartoon area. */
+  outline?: boolean;
+  /** Brighten cartoon areas that sit in shadow, so they look drawn rather than photographed. */
+  evenLight?: boolean;
 }
 
-/** Brightens, adds contrast or boosts color before conversion, so a dull photo doesn't give a dull pattern. */
+/** How much one color can be scaled up when its area is brightened, so shadows don't turn neon. */
+const MAX_CHROMA_GAIN = 1.9;
+/** Extra color strength given to cartoon areas. */
+const VIVID = 1.4;
+
+/** Brightens, adds contrast, boosts color and lifts shadows before conversion. */
 function adjust(s: Sampled, o: ConvertOptions): Sampled {
   const br = (o.brightness ?? 0) / 400, ct = Math.pow(2, (o.contrast ?? 0) / 100);
   const sat = (o.saturation ?? 0) < 0 ? 1 + (o.saturation ?? 0) / 100 : 1 + (o.saturation ?? 0) / 50;
-  if (!br && ct === 1 && sat === 1) return s;
+  const lift = ((o.lift ?? 0) / 100) * 2.4;
+  if (!br && ct === 1 && sat === 1 && !lift) return s;
   const L = s.L.slice(), A = s.A.slice(), B = s.B.slice();
   for (let i = 0; i < L.length; i++) {
-    L[i] = Math.min(1, Math.max(0, (L[i] - 0.5) * ct + 0.5 + br));
-    A[i] *= sat;
-    B[i] *= sat;
+    let l = L[i], gain = sat;
+    if (lift && l > 0.001) {
+      // Adds most around the dark mid-tones and nothing at pure black or white; color grows with brightness.
+      const lifted = l + lift * l * (1 - l) * (1 - l);
+      gain *= Math.min(MAX_CHROMA_GAIN, lifted / l);
+      l = lifted;
+    }
+    L[i] = Math.min(1, Math.max(0, (l - 0.5) * ct + 0.5 + br));
+    A[i] *= gain;
+    B[i] *= gain;
   }
   return { ...s, L, A, B };
 }
@@ -110,9 +132,10 @@ export function sampleImage(img: HTMLImageElement, crop: Crop, w: number, h: num
 function flattenAreas(s: Sampled): Sampled {
   const sums = new Float64Array(256 * 4);
   let any = false;
+  const isFlat = (l: number) => l >= FLAT0 && l < CARTOON0;
   for (let i = 0; i < s.label.length; i++) {
     const l = s.label[i];
-    if (l < FLAT0 || !s.mask[i]) continue;
+    if (!isFlat(l) || !s.mask[i]) continue;
     any = true;
     sums[l * 4] += s.L[i]; sums[l * 4 + 1] += s.A[i]; sums[l * 4 + 2] += s.B[i]; sums[l * 4 + 3]++;
   }
@@ -120,7 +143,7 @@ function flattenAreas(s: Sampled): Sampled {
   const L = s.L.slice(), A = s.A.slice(), B = s.B.slice();
   for (let i = 0; i < s.label.length; i++) {
     const l = s.label[i];
-    if (l < FLAT0 || !s.mask[i]) continue;
+    if (!isFlat(l) || !s.mask[i]) continue;
     const c = sums[l * 4 + 3];
     L[i] = sums[l * 4] / c; A[i] = sums[l * 4 + 1] / c; B[i] = sums[l * 4 + 2] / c;
   }
@@ -128,21 +151,50 @@ function flattenAreas(s: Sampled): Sampled {
 }
 
 /**
+ * Gives cartoon areas their drawn look: stronger color, and (with `brighten`) each area that sits in
+ * shadow is lifted toward an even, mid-bright level so an orange cat in the shade comes out orange.
+ */
+function cartoonLight(s: Sampled, brighten: boolean): Sampled {
+  const byArea = new Map<number, number[]>();
+  for (let i = 0; i < s.label.length; i++) {
+    if (s.label[i] >= CARTOON0 && s.mask[i]) (byArea.get(s.label[i]) ?? byArea.set(s.label[i], []).get(s.label[i])!).push(i);
+  }
+  if (!byArea.size) return s;
+  const L = s.L.slice(), A = s.A.slice(), B = s.B.slice();
+  for (const idx of byArea.values()) {
+    const sorted = idx.map((i) => L[i]).sort((a, b) => a - b);
+    const median = sorted[sorted.length >> 1];
+    const target = 0.62;
+    // A gain, not an offset: darks stay darker than lights, so the shading inside the area survives.
+    const gain = brighten && median < target && median > 0.02 ? 1 + (target / median - 1) * 0.75 : 1;
+    for (const i of idx) {
+      const l = Math.min(0.97, L[i] * gain);
+      // Color is pushed a little past natural, the way a drawing exaggerates it.
+      const g = (L[i] > 0.001 ? Math.min(MAX_CHROMA_GAIN, l / L[i]) : 1) * VIVID;
+      L[i] = l; A[i] *= g; B[i] *= g;
+    }
+  }
+  return { ...s, L, A, B };
+}
+
+/**
  * Edge-preserving blur: each pixel moves toward neighbours of a similar color and ignores
  * very different ones, so flat areas get flatter while outlines stay sharp.
- * Only unmarked stitches are changed; detail and solid areas are left exactly as they are.
+ * `cartoon` chooses which stitches are processed: unmarked ones gently, or cartoon areas strongly and
+ * only among stitches of the same area. Everything else is left exactly as it is.
  */
-function smooth(s: Sampled, passes: number): Sampled {
+function smooth(s: Sampled, passes: number, cartoon = false): Sampled {
   let { L, A, B } = s;
   const { w, h, mask, label } = s;
-  const sig2 = 2 * 0.07 * 0.07;
+  const sigma = cartoon ? 0.13 : 0.07, sig2 = 2 * sigma * sigma;
   for (let p = 0; p < passes; p++) {
     const nL = new Float32Array(L.length), nA = new Float32Array(L.length), nB = new Float32Array(L.length);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = y * w + x;
         if (!mask[i]) continue;
-        if (label[i] !== NONE) { nL[i] = L[i]; nA[i] = A[i]; nB[i] = B[i]; continue; }
+        const mine = cartoon ? label[i] >= CARTOON0 : label[i] === NONE;
+        if (!mine) { nL[i] = L[i]; nA[i] = A[i]; nB[i] = B[i]; continue; }
         let sl = 0, sa = 0, sb = 0, sw = 0;
         for (let dy = -1; dy <= 1; dy++) {
           const yy = y + dy;
@@ -151,7 +203,7 @@ function smooth(s: Sampled, passes: number): Sampled {
             const xx = x + dx;
             if (xx < 0 || xx >= w) continue;
             const j = yy * w + xx;
-            if (!mask[j]) continue;
+            if (!mask[j] || (cartoon && label[j] !== label[i])) continue;
             const d2 = (L[i] - L[j]) ** 2 + (A[i] - A[j]) ** 2 + (B[i] - B[j]) ** 2;
             const wt = Math.exp(-d2 / sig2);
             sl += L[j] * wt; sa += A[j] * wt; sb += B[j] * wt; sw += wt;
@@ -174,43 +226,38 @@ function rng(seed: number) {
   };
 }
 
-/** Reduces a sampled picture to a small set of colors (k-means clustering), then tidies stray stitches. */
-export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
-  const flat = flattenAreas(adjust(src, o));
-  const s = o.smooth > 0 ? smooth(flat, o.smooth * 2) : flat;
-  const { w, h, L, A, B, mask, label } = s;
-  const n = w * h;
+interface Clusters { L: Float64Array; A: Float64Array; B: Float64Array; nearest: (i: number) => number }
 
-  const all: number[] = [];
-  for (let i = 0; i < n; i++) if (mask[i]) all.push(i);
-  const cells = new Uint16Array(n);
-  if (!all.length) return { width: w, height: h, cells, palette: [] };
-
-  const step = Math.max(1, Math.ceil(all.length / 15000));
+/**
+ * k-means clustering of the given stitches into k colors. Brightness counts for less than hue
+ * (`lightWeight` below 1), so two things of different color stay apart even when equally dark.
+ */
+function kmeans(s: Sampled, idx: number[], k: number, lightWeight: number, weight: (i: number) => number): Clusters {
+  const { L, A, B } = s;
+  const step = Math.max(1, Math.ceil(idx.length / 15000));
   const pts: number[] = [];
-  for (let i = 0; i < all.length; i += step) pts.push(all[i]);
-  const k = Math.max(1, Math.min(o.colors, pts.length));
+  for (let i = 0; i < idx.length; i += step) pts.push(idx[i]);
+  k = Math.max(1, Math.min(k, pts.length));
+  const lw2 = lightWeight * lightWeight;
+  const cL = new Float64Array(k), cA = new Float64Array(k), cB = new Float64Array(k);
+  const d2 = (i: number, c: number) => lw2 * (L[i] - cL[c]) ** 2 + (A[i] - cA[c]) ** 2 + (B[i] - cB[c]) ** 2;
 
   // k-means++ start: spread the first guesses out so distinct colors each get a cluster.
   const rand = rng(12345);
-  const cL = new Float64Array(k), cA = new Float64Array(k), cB = new Float64Array(k);
-  // Detail areas count for more, so the palette is chosen to serve them first.
-  const wt = (i: number) => (label[i] === DETAIL ? 4 : 1);
   const dist = new Float64Array(pts.length).fill(Infinity);
   let pick = pts[Math.floor(rand() * pts.length)];
   for (let c = 0; c < k; c++) {
     cL[c] = L[pick]; cA[c] = A[pick]; cB[c] = B[pick];
     let total = 0;
     for (let j = 0; j < pts.length; j++) {
-      const i = pts[j];
-      const d = (L[i] - cL[c]) ** 2 + (A[i] - cA[c]) ** 2 + (B[i] - cB[c]) ** 2;
+      const d = d2(pts[j], c);
       if (d < dist[j]) dist[j] = d;
-      total += dist[j] * wt(i);
+      total += dist[j] * weight(pts[j]);
     }
     let t = rand() * total;
     pick = pts[pts.length - 1];
     for (let j = 0; j < pts.length; j++) {
-      t -= dist[j] * wt(pts[j]);
+      t -= dist[j] * weight(pts[j]);
       if (t <= 0) { pick = pts[j]; break; }
     }
   }
@@ -218,7 +265,7 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
   const nearest = (i: number) => {
     let best = 0, bd = Infinity;
     for (let c = 0; c < k; c++) {
-      const d = (L[i] - cL[c]) ** 2 + (A[i] - cA[c]) ** 2 + (B[i] - cB[c]) ** 2;
+      const d = d2(i, c);
       if (d < bd) { bd = d; best = c; }
     }
     return best;
@@ -228,7 +275,7 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
   for (let iter = 0; iter < 12; iter++) {
     sums.fill(0);
     for (const i of pts) {
-      const c = nearest(i) * 4, m = wt(i);
+      const c = nearest(i) * 4, m = weight(i);
       sums[c] += L[i] * m; sums[c + 1] += A[i] * m; sums[c + 2] += B[i] * m; sums[c + 3] += m;
     }
     for (let c = 0; c < k; c++) {
@@ -237,26 +284,112 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
       cL[c] = sums[c * 4] / cnt; cA[c] = sums[c * 4 + 1] / cnt; cB[c] = sums[c * 4 + 2] / cnt;
     }
   }
+  return { L: cL, A: cA, B: cB, nearest };
+}
 
-  for (const i of all) cells[i] = nearest(i) + 1;
-  if (o.clean > 0) {
-    // Tidy only unmarked stitches, and never let empty fabric creep into the picture or the reverse.
-    const before = cells.slice();
-    despeckle(cells, w, h, o.clean);
-    for (let i = 0; i < n; i++) {
-      if (label[i] !== NONE || !mask[i] || !cells[i]) cells[i] = before[i];
-    }
+/**
+ * Turns a sampled picture into a pattern.
+ *
+ * Cartoon areas are handled one at a time: lighting evened out, texture smoothed away, then reduced to a
+ * few flat tones of their own, so each keeps its own colors however dark or busy the rest of the photo is.
+ * Everything else shares the main color budget.
+ */
+export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
+  let s = flattenAreas(adjust(src, o));
+  s = cartoonLight(s, o.evenLight !== false);
+  if (o.smooth > 0) s = smooth(s, o.smooth * 2);
+  s = smooth(s, 5, true);
+  const { w, h, mask, label } = s;
+  const n = w * h;
+  const cells = new Uint16Array(n);
+
+  // Colors found so far, as Oklab triples; cells hold index + 1.
+  const colors: [number, number, number][] = [];
+  const add = (c: Clusters, k: number) => { colors.push([c.L[k], c.A[k], c.B[k]]); return colors.length; };
+
+  const rest: number[] = [];
+  const areas = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    if (!mask[i]) continue;
+    if (label[i] >= CARTOON0) (areas.get(label[i]) ?? areas.set(label[i], []).get(label[i])!).push(i);
+    else rest.push(i);
+  }
+  if (!rest.length && !areas.size) return { width: w, height: h, cells, palette: [] };
+
+  if (rest.length) {
+    // Detail areas count for more, so the palette is chosen to serve them first.
+    const c = kmeans(s, rest, o.colors, 0.75, (i) => (label[i] === DETAIL ? 4 : 1));
+    const ids = Array.from(c.L, (_, k) => add(c, k));
+    for (const i of rest) cells[i] = ids[c.nearest(i)];
   }
 
-  // Drop colors that ended up unused and order the rest by how much they are used.
-  const counts = new Array<number>(k + 1).fill(0);
-  for (let i = 0; i < n; i++) counts[cells[i]]++;
-  const order = [...Array(k).keys()].filter((c) => counts[c + 1] > 0).sort((a, b) => counts[b + 1] - counts[a + 1]);
-  const remap = new Uint16Array(k + 1);
-  order.forEach((c, idx) => { remap[c + 1] = idx + 1; });
+  for (const idx of areas.values()) {
+    const c = kmeans(s, idx, Math.max(2, Math.min(6, o.tones ?? 3)), 0.6, () => 1);
+    const ids = Array.from(c.L, (_, k) => add(c, k));
+    for (const i of idx) cells[i] = ids[c.nearest(i)];
+  }
+
+  // Tidy stray stitches. Empty fabric never creeps into the picture or the reverse.
+  const tidy = (level: number, pick: (l: number) => boolean, withinArea: boolean) => {
+    const before = cells.slice();
+    despeckle(cells, w, h, level);
+    for (let i = 0; i < n; i++) {
+      if (cells[i] === before[i]) continue;
+      const l = label[i];
+      let ok = pick(l) && mask[i] === 1 && cells[i] !== 0;
+      if (ok && withinArea) {
+        // Only take a color that is already used next door inside the same area.
+        ok = false;
+        const x = i % w, y = (i / w) | 0;
+        for (let dy = -1; dy <= 1 && !ok; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          const j = yy * w + xx;
+          if (before[j] === cells[i] && label[j] === l) { ok = true; break; }
+        }
+      }
+      if (!ok) cells[i] = before[i];
+    }
+  };
+  if (o.clean > 0) tidy(o.clean, (l) => l === NONE, false);
+  // Cartoon areas are always tidied: drawn shapes have no speckle.
+  if (areas.size) tidy(2, (l) => l >= CARTOON0, true);
+
+  if (o.outline && areas.size) {
+    // One shared dark line color, drawn on the outermost stitches of each cartoon area wherever it
+    // meets something else (not along the edge of the canvas).
+    let dark = 1;
+    for (const c of colors) dark = Math.min(dark, c[0]);
+    colors.push([Math.min(0.24, dark * 0.8), 0.006, 0.01]);
+    const line = colors.length;
+    const edge: number[] = [];
+    for (const idx of areas.values()) {
+      for (const i of idx) {
+        const x = i % w, y = (i / w) | 0, l = label[i];
+        const differs = (xx: number, yy: number) => xx >= 0 && yy >= 0 && xx < w && yy < h && (label[yy * w + xx] !== l || !mask[yy * w + xx]);
+        if (differs(x - 1, y) || differs(x + 1, y) || differs(x, y - 1) || differs(x, y + 1)) edge.push(i);
+      }
+    }
+    for (const i of edge) cells[i] = line;
+  }
+
+  // Merge colors that came out almost identical in different areas, drop unused ones, most-used first.
+  const merged = colors.map((_, k) => k);
+  for (let a = 0; a < colors.length; a++) {
+    if (merged[a] !== a) continue;
+    for (let b = a + 1; b < colors.length; b++) {
+      const d = (colors[a][0] - colors[b][0]) ** 2 + (colors[a][1] - colors[b][1]) ** 2 + (colors[a][2] - colors[b][2]) ** 2;
+      if (merged[b] === b && d < 0.022 * 0.022) merged[b] = a;
+    }
+  }
+  const counts = new Array<number>(colors.length).fill(0);
+  for (let i = 0; i < n; i++) if (cells[i]) { cells[i] = merged[cells[i] - 1] + 1; counts[cells[i] - 1]++; }
+  const order = colors.map((_, k) => k).filter((k) => counts[k] > 0).sort((a, b) => counts[b] - counts[a]);
+  const remap = new Uint16Array(colors.length + 1);
+  order.forEach((k, idx) => { remap[k + 1] = idx + 1; });
   for (let i = 0; i < n; i++) cells[i] = remap[cells[i]];
-  const palette = order.map((c) => {
-    const [r, g, b] = oklabToRgb(cL[c], cA[c], cB[c]);
+  const palette = order.map((k) => {
+    const [r, g, b] = oklabToRgb(colors[k][0], colors[k][1], colors[k][2]);
     return rgbToHex(r, g, b);
   });
   return { width: w, height: h, cells, palette };

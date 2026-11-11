@@ -1,12 +1,17 @@
 import { useState } from 'react';
 import { Modal } from './dialogs';
 import { SHORTCUTS } from './extras';
+import convertShot from '../docs/convert.png';
+import editorShot from '../docs/editor.png';
+import guideShot from '../docs/guide-photo.jpg';
+import stitchShot from '../docs/stitch-mode.png';
 
 /** The in-app guide. Each section is a list of [heading, explanation] pairs. */
-const SECTIONS: { title: string; intro?: string; items: [string, string][] }[] = [
+const SECTIONS: { title: string; intro?: string; image?: [string, string]; items: [string, string][] }[] = [
   {
     title: 'Getting started',
     intro: 'CrossPattern is a cross stitch pattern editor that runs entirely in your browser. There is nothing to install and no account; your work stays on your own computer.',
+    image: [editorShot, 'The editor with a pattern made from a photo of a kitten and a plant'],
     items: [
       ['Draw from scratch', 'Pick a color on the right, pick a tool on the left, and click or drag on the grid. Every square is one stitch. The bold lines mark every tenth stitch.'],
       ['Start from a picture', 'Press Convert picture, choose a photo, crop it to the size you want to stitch, then mark what to keep, flatten or remove. See "Converting a picture".'],
@@ -42,18 +47,23 @@ const SECTIONS: { title: string; intro?: string; items: [string, string][] }[] =
   },
   {
     title: 'Converting a picture',
-    intro: 'Conversion has two steps. The aim is a pattern you can actually stitch: few colors, clean shapes, no speckle.',
+    intro: 'Conversion has two steps. The aim is a pattern you can actually stitch: few colors, clean shapes, no speckle. Everything is saved as you go, so closing the window or refreshing the page loses nothing.',
+    image: [convertShot, 'Marking a photo: the kitten, plant and pot are cartoon areas and the background is removed'],
     items: [
       ['1. Crop and size', 'Type the width and height in stitches. The crop box takes that shape; drag it, or a corner, to choose what goes in. The total stitch count and finished size on your fabric are shown as you go.'],
       ['2. Mark areas', 'Paint on the photo to tell the converter what matters. Remove leaves an area as empty fabric. One color turns each marked area into a single solid color. Keep detail protects an area from simplifying and gives it priority when colors are chosen.'],
+      ['Cartoon', 'Redraws an area like a drawing: its lighting is evened out, its color strengthened, and it is reduced to a few flat tones of its own with an optional dark outline. Mark each object as its own area (the cat, the plant, the pot). This is the mark to reach for when a subject is in shadow or the photo comes out as a muddy jumble.'],
+      ['Zooming in', 'Pinch or hold ⌘/Ctrl while scrolling over the photo to zoom in for small features. Scroll or Alt-drag to move around.'],
       ['Brush, Lasso, Magic wand', 'Brush paints a mark, Lasso marks everything inside a shape you draw, and Magic wand marks the connected area of similar color around where you click.'],
       ['Removing a background', 'Mark the subject (roughly is fine), switch to Remove, and press "Remove everything unmarked". The subject gets a crisp outline and all the colors go to it instead of the background.'],
-      ['Colors and simplifying', 'Colors sets how many thread colors to use. Flatten smooths shading in unmarked areas. Remove stray stitches clears single stitches. Adjust the photo changes brightness, contrast and color strength first.'],
+      ['Colors and simplifying', 'Colors sets how many thread colors to use. Flatten smooths shading in unmarked areas. Remove stray stitches clears single stitches. Adjust the photo lifts shadows and changes brightness, contrast and color strength first.'],
+      ['Changing your mind later', 'A pattern remembers the conversion it came from. "Edit conversion" at the top of the right panel reopens it with the same crop, marks and settings.'],
       ['A good order for a portrait', 'Remove the background, keep detail on eyes, nose and edges, leave fur or skin unmarked so it flattens, then lower the color count until it looks right.'],
     ],
   },
   {
     title: 'Fine-tuning',
+    image: [guideShot, 'The original photo faded over the pattern as a guide'],
     items: [
       ['Guide picture', 'After converting, the photo and the first conversion are kept. Show either one over your pattern from the top of the right panel, and use the slider to fade between it and your stitches. Hold P to see the guide in full.'],
       ['Tracing', 'On any pattern you can add a photo to trace over with "Add a photo to trace".'],
@@ -64,11 +74,13 @@ const SECTIONS: { title: string; intro?: string; items: [string, string][] }[] =
   },
   {
     title: 'Stitching',
+    image: [stitchShot, 'Stitch mode with symbols: finished squares are faded and progress is counted'],
     items: [
       ['Stitch mode', 'Turn on Stitch mode to track real-life progress. Click or drag over squares to tick them off as stitched; they fade so what is left stands out. Click again to untick.'],
       ['Whole patches', 'Shift-click ticks off the whole connected patch of one color.'],
       ['Progress', 'The palette shows stitched and total counts per color, and the bottom of the panel shows overall progress. Progress is saved with the project.'],
       ['Symbols', 'Turn on Symbols to see each color\'s chart symbol in its squares, which helps tell similar shades apart.'],
+      ['On a phone', 'The pattern opens ready to look around: drag to move and pinch to zoom. Stitch mode works with a tap, so you can tick off stitches from the sofa. Colors opens the palette.'],
     ],
   },
   {
@@ -101,6 +113,7 @@ export function GuideDialog({ onClose }: { onClose: () => void }) {
           {section ? (
             <>
               {section.intro && <p className="lead">{section.intro}</p>}
+              {section.image && <img className="shot" src={section.image[0]} alt={section.image[1]} />}
               <dl>
                 {section.items.map(([head, text]) => (
                   <div key={head}><dt>{head}</dt><dd>{text}</dd></div>
