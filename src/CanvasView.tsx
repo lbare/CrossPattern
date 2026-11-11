@@ -3,7 +3,7 @@ import { clamp } from './color';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
-  S, Tool, addColor, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, doneMap, dropUndo, emit,
+  S, Tool, PatchAction, addColor, clearPatch, patchAction, selectPatch, selectSameColors, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, doneMap, dropUndo, emit,
   fitView, keys, liftSelection, lockedIds, openDialog, pushUndo, refImage, samplePhoto, selectedRect, subscribe, transformSelection,
   undo, useStore, zoomAt,
 } from './store';
@@ -206,6 +206,27 @@ export function CanvasView() {
         ctx.lineCap = 'butt';
       }
 
+      const patch = S.patch;
+      if (patch && patch.mask.length === p.cells.length) {
+        // The selected shape: a light wash over its squares and a two-tone line around its edge.
+        const x0 = clamp(Math.floor(-ox / scale), 0, p.width), x1 = clamp(Math.ceil((w - ox) / scale), 0, p.width);
+        const y0 = clamp(Math.floor(-oy / scale), 0, p.height), y1 = clamp(Math.ceil((h - oy) / scale), 0, p.height);
+        const on = (x: number, y: number) => x >= 0 && y >= 0 && x < p.width && y < p.height && patch.mask[y * p.width + x] === 1;
+        ctx.fillStyle = 'rgba(255,255,255,0.22)';
+        const edge = new Path2D();
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+          if (!on(x, y)) continue;
+          ctx.fillRect(x * scale, y * scale, scale, scale);
+          const l = x * scale + 0.5, t = y * scale + 0.5, r = (x + 1) * scale + 0.5, b = (y + 1) * scale + 0.5;
+          if (!on(x, y - 1)) { edge.moveTo(l, t); edge.lineTo(r, t); }
+          if (!on(x, y + 1)) { edge.moveTo(l, b); edge.lineTo(r, b); }
+          if (!on(x - 1, y)) { edge.moveTo(l, t); edge.lineTo(l, b); }
+          if (!on(x + 1, y)) { edge.moveTo(r, t); edge.lineTo(r, b); }
+        }
+        ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff'; ctx.stroke(edge);
+        ctx.lineWidth = 1.25; ctx.strokeStyle = '#111'; ctx.setLineDash([4, 3]); ctx.stroke(edge); ctx.setLineDash([]);
+      }
+
       const sel = S.floating ?? S.selection;
       if (sel) {
         const r = [sel.x * scale + 0.5, sel.y * scale + 0.5, sel.w * scale, sel.h * scale] as const;
@@ -320,6 +341,10 @@ export function CanvasView() {
       let tool = S.tool;
       if (e.altKey && tool !== 'backstitch' && tool !== 'select') tool = 'picker';
 
+      if (tool === 'shape') {
+        if (inside(c.x, c.y)) selectPatch(c.x, c.y, e.shiftKey); else clearPatch();
+        return;
+      }
       switch (tool) {
         case 'pencil':
         case 'eraser':
@@ -550,6 +575,7 @@ export function CanvasView() {
     <div className="canvas-wrap">
       <canvas ref={ref} />
       <SelectionBar />
+      <PatchBar />
     </div>
   );
 }
@@ -582,6 +608,33 @@ function SelectionBar() {
         </button>
       )}
       <button className="btn small primary" onClick={() => { commitFloating(); S.selection = null; emit(false); }}>Done</button>
+    </div>
+  );
+}
+
+/** Actions for the shape picked with the Shape select tool. */
+function PatchBar() {
+  useStore();
+  const sel = S.patch;
+  if (!sel) return null;
+  const hex = S.pattern.palette.find((c) => c.id === S.colorId)?.hex;
+  const act = (kind: PatchAction, label: string, title: string) => (
+    <button className="btn small" title={title} onClick={() => patchAction(kind)}>{label}</button>
+  );
+  return (
+    <div className="selbar">
+      <span className="muted">{sel.count.toLocaleString()} stitches</span>
+      <button className="btn small" title="Recolor the whole shape with the current color" onClick={() => patchAction('fill')}>
+        <span className="dot" style={{ background: hex }} /> Fill
+      </button>
+      {act('absorb', 'Absorb', 'Give the shape the color that surrounds it most, so it disappears into its surroundings')}
+      {act('erase', 'Erase', 'Remove the stitches in the shape')}
+      {act('grow', 'Grow', 'Make the shape one stitch bigger all round')}
+      {act('shrink', 'Shrink', 'Make the shape one stitch smaller all round')}
+      {act('smooth', 'Smooth edge', 'Trim squares that stick out and fill in notches')}
+      {act('outline', 'Outline', 'Backstitch around the shape in the current color')}
+      <button className="btn small" title="Select every stitch of this color, anywhere in the pattern" onClick={selectSameColors}>All of this color</button>
+      <button className="btn small primary" onClick={clearPatch}>Done</button>
     </div>
   );
 }

@@ -216,7 +216,7 @@ export function ReconvertDialog({ onClose }: { onClose: () => void }) {
 export const SHORTCUTS: [string, [string, string][]][] = [
   ['Tools', [
     ['B', 'Pencil'], ['E', 'Eraser'], ['C', 'Recolor brush'], ['T', 'Tidy brush'], ['O', 'Restore brush'], ['G', 'Fill'],
-    ['I', 'Pick color'], ['L', 'Line'], ['R', 'Rectangle'], ['U', 'Ellipse'], ['M', 'Select'], ['K', 'Backstitch'], ['H', 'Move view'],
+    ['I', 'Pick color'], ['L', 'Line'], ['R', 'Rectangle'], ['U', 'Ellipse'], ['S', 'Shape select'], ['M', 'Select'], ['K', 'Backstitch'], ['H', 'Move view'],
   ]],
   ['While painting', [
     ['[ and ]', 'Brush smaller / larger'], ['Alt-click', 'Pick up the color under the cursor'],

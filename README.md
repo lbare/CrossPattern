@@ -43,6 +43,7 @@ one stitch, and bold lines mark every tenth.
 | Line | `L` | Straight line of stitches. |
 | Rectangle | `R` | Outline, or filled with Shift. |
 | Ellipse | `U` | Outline, or filled with Shift. |
+| Shape select | `S` | Click a patch of color to select all of it, then fill, absorb, erase, grow, shrink, smooth or outline it. |
 | Select | `M` | Drag to select, drag inside to move. Flip, rotate, copy, cut, crop from the bar that appears. |
 | Backstitch | `K` | Drag between grid corners to add an outline. Alt-click a line to remove it. |
 | Move view | `H` | Drag to pan. Space-drag works with any tool. |
@@ -87,6 +88,8 @@ area has its own colors, a subject in shadow is not drowned out by a busy backgr
 
   ![The original photo faded over the pattern](docs/guide-photo.jpg)
 
+- **Shape select**: click any patch of color to work on it as a whole. Absorb makes a stray blob disappear into
+  its surroundings, Grow and Shrink move its edge by one stitch, and Smooth edge trims jagged corners.
 - **Re-convert**: select an area and press Re-convert to convert just that part of the photo again.
 - **Lock** a color so no tool can paint over it while you work around it.
 - **Simplify**: reduce to a number of colors, remove stray stitches everywhere, or add an outline around the

@@ -26,6 +26,7 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
       ['Recolor brush', 'Replaces only the color you start the stroke on with the current color. Everything else under the brush is left alone, so you can fix one color without going outside the lines.'],
       ['Tidy brush', 'Brush over a noisy patch and stray stitches are absorbed into the colors around them. It only affects where you brush.'],
       ['Restore brush', 'Paints back the stitches from the first conversion of a picture, for when you have simplified too far.'],
+      ['Shape select', 'Click a patch of color and the whole patch is selected; Shift-click adds more. A bar then lets you fill it with the current color, absorb it into whatever surrounds it, erase it, grow or shrink it by one stitch, smooth its edge, or outline it in backstitch. "All of this color" widens the selection to that color everywhere. Most cleanup is "this blob should be that color", and this does it in two clicks.'],
       ['Fill', 'Fills a connected area with the current color. Shift-click replaces that color everywhere in the pattern.'],
       ['Pick color', 'Click a stitch to use its color. Shift-click takes the exact shade from the guide photo and adds it to the palette. Holding Alt with most tools picks a color without switching tools.'],
       ['Line, Rectangle, Ellipse', 'Drag to draw the shape. Hold Shift for a filled rectangle or ellipse.'],

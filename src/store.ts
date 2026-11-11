@@ -3,13 +3,13 @@ import { clamp, hslToHex, rgbToHex } from './color';
 import { ProjectRecord, deleteProject, getProject, listProjects, putProject } from './db';
 import { FABRIC, buildCellImage } from './render';
 import {
-  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, contentBounds, createPattern, cropped, deserialize, despeckle, mergeColor,
+  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, contentBounds, createPattern, cropped, deserialize, edgesOf, despeckle, mergeColor,
   outlineCells, outlineEdges,
   nextId, nextSymbol, reduceColors, removeColor, removeUnused, resized, serialize,
 } from './model';
 
 export type Tool =
-  | 'pencil' | 'eraser' | 'recolor' | 'tidy' | 'restore' | 'fill' | 'picker' | 'line' | 'rect' | 'ellipse' | 'select' | 'backstitch' | 'pan';
+  | 'pencil' | 'eraser' | 'recolor' | 'tidy' | 'restore' | 'fill' | 'picker' | 'line' | 'rect' | 'ellipse' | 'select' | 'shape' | 'backstitch' | 'pan';
 export type RefMode = 'off' | 'photo' | 'converted';
 
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -63,6 +63,8 @@ export const S = {
   refOpacity: 0.5,
   refPeek: false,
   selection: null as Rect | null,
+  /** Stitches picked with the Shape select tool: 1 per selected square, and how many there are. */
+  patch: null as { mask: Uint8Array; count: number } | null,
   floating: null as Floating | null,
   view: { scale: 16, ox: 40, oy: 40 },
   /** True while the view is still the automatic fit, so it can follow window resizes. */
@@ -238,6 +240,7 @@ export function dropUndo(): void {
 export function undo(): void {
   S.floating = null;
   S.selection = null;
+  S.patch = null;
   const s = S.undo.pop();
   if (!s) return emit(false);
   S.redo.push(snapshot());
@@ -251,6 +254,7 @@ export function redo(): void {
   if (!s) return;
   S.floating = null;
   S.selection = null;
+  S.patch = null;
   S.undo.push(snapshot());
   restore(s);
   emit();
@@ -289,6 +293,7 @@ export function zoomBy(factor: number): void {
 export function setTool(tool: Tool): void {
   if (tool === 'restore' && !S.pattern.reference?.converted) return;
   if (tool !== 'select') { commitFloating(); S.selection = null; }
+  if (tool !== 'shape') S.patch = null;
   S.tool = tool;
   emit(false);
 }
@@ -605,6 +610,7 @@ export function setPattern(p: Pattern): void {
   pushUndo();
   S.floating = null;
   S.selection = null;
+  S.patch = null;
   S.highlight = 0;
   S.pattern = p;
   fixCurrentColor();
@@ -658,6 +664,7 @@ function activate(id: string, p: Pattern): void {
   S.redo = [];
   S.floating = null;
   S.selection = null;
+  S.patch = null;
   S.highlight = 0;
   fixCurrentColor();
   emit();
@@ -782,5 +789,117 @@ export function removeReference(): void {
   pushUndo();
   S.pattern.reference = undefined;
   fixCurrentColor();
+  emit();
+}
+
+// ---- Shape select: work on whole patches of color -----------------------
+
+/** Selects the connected patch of one color under a square. With `add`, it joins what is already selected. */
+export function selectPatch(x: number, y: number, add: boolean): void {
+  const p = S.pattern, n = p.cells.length, start = y * p.width + x, color = p.cells[start];
+  const mask = add && S.patch?.mask.length === n ? S.patch.mask.slice() : new Uint8Array(n);
+  const stack = [start];
+  mask[start] = 1;
+  while (stack.length) {
+    const i = stack.pop()!, cx = i % p.width;
+    for (const j of [cx > 0 ? i - 1 : -1, cx < p.width - 1 ? i + 1 : -1, i - p.width, i + p.width]) {
+      if (j >= 0 && j < n && !mask[j] && p.cells[j] === color) { mask[j] = 1; stack.push(j); }
+    }
+  }
+  S.patch = { mask, count: mask.reduce((a, v) => a + v, 0) };
+  emit(false);
+}
+
+export function clearPatch(): void {
+  if (!S.patch) return;
+  S.patch = null;
+  emit(false);
+}
+
+/** Widens the selection to every stitch, anywhere, of the colors it already contains. */
+export function selectSameColors(): void {
+  const p = S.pattern, sel = S.patch;
+  if (!sel) return;
+  const colors = new Set<number>();
+  for (let i = 0; i < sel.mask.length; i++) if (sel.mask[i]) colors.add(p.cells[i]);
+  const mask = new Uint8Array(p.cells.length);
+  for (let i = 0; i < mask.length; i++) if (colors.has(p.cells[i])) mask[i] = 1;
+  S.patch = { mask, count: mask.reduce((a, v) => a + v, 0) };
+  emit(false);
+}
+
+export type PatchAction = 'fill' | 'erase' | 'absorb' | 'grow' | 'shrink' | 'smooth' | 'outline';
+
+/** Does something to the whole selected shape at once. Locked colors are left alone. */
+export function patchAction(kind: PatchAction): void {
+  const sel = S.patch, p = S.pattern;
+  if (!sel || sel.mask.length !== p.cells.length) return;
+  const { width: w, height: h, cells } = p, n = cells.length, mask = sel.mask;
+  const locked = lockedIds();
+  const write = (i: number, v: number) => { if (!locked.has(cells[i])) cells[i] = v; };
+  const around = (i: number, eight: boolean) => {
+    const x = i % w, y = (i / w) | 0, out: number[] = [];
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if ((!dx && !dy) || (!eight && dx && dy)) continue;
+      const xx = x + dx, yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < w && yy < h) out.push(yy * w + xx);
+    }
+    return out;
+  };
+  const before = mask.slice(), was = cells.slice();
+  /** The most common color among the given squares that are on the wanted side of the selection. */
+  const commonest = (squares: number[], inside: boolean) => {
+    const tally = new Map<number, number>();
+    let best = -1, bestN = 0;
+    for (const j of squares) {
+      if (!!before[j] !== inside) continue;
+      const c = (tally.get(was[j]) ?? 0) + 1;
+      tally.set(was[j], c);
+      if (c > bestN) { bestN = c; best = was[j]; }
+    }
+    return best;
+  };
+  pushUndo();
+
+  if (kind === 'fill') { for (let i = 0; i < n; i++) if (mask[i]) write(i, S.colorId); }
+  else if (kind === 'erase') { for (let i = 0; i < n; i++) if (mask[i]) write(i, 0); }
+  else if (kind === 'absorb') {
+    // The shape takes on whichever color surrounds it most.
+    const rim: number[] = [];
+    for (let i = 0; i < n; i++) if (mask[i]) for (const j of around(i, false)) if (!mask[j]) rim.push(j);
+    const c = commonest(rim, false);
+    if (c >= 0) for (let i = 0; i < n; i++) if (mask[i]) write(i, c);
+  } else if (kind === 'grow') {
+    for (let i = 0; i < n; i++) {
+      if (before[i]) continue;
+      const c = commonest(around(i, false), true);
+      if (c >= 0) { write(i, c); mask[i] = 1; }
+    }
+  } else if (kind === 'shrink') {
+    for (let i = 0; i < n; i++) {
+      if (!before[i]) continue;
+      const c = commonest(around(i, false), false);
+      if (c >= 0) { write(i, c); mask[i] = 0; }
+    }
+  } else if (kind === 'smooth') {
+    // Nibble off squares that stick out and fill in notches, judging each by its eight neighbours.
+    for (let i = 0; i < n; i++) {
+      const nb = around(i, true);
+      let inside = 0;
+      for (const j of nb) inside += before[j];
+      if (before[i] && inside <= Math.min(2, nb.length - 3)) {
+        const c = commonest(nb, false);
+        if (c >= 0) { write(i, c); mask[i] = 0; }
+      } else if (!before[i] && inside >= 6) {
+        const c = commonest(nb, true);
+        if (c >= 0) { write(i, c); mask[i] = 1; }
+      }
+    }
+  } else if (kind === 'outline' && S.colorId) {
+    const inSel = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h && mask[y * w + x] === 1;
+    p.backstitches.push(...edgesOf(w, h, inSel).map((e) => ({ ...e, colorId: S.colorId })));
+  }
+  sel.count = mask.reduce((a, v) => a + v, 0);
+  if (!sel.count) S.patch = null;
   emit();
 }

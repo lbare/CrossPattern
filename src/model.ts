@@ -302,7 +302,11 @@ export function contentBounds(p: Pattern): { x: number; y: number; w: number; h:
 /** Grid-line segments that run along every boundary between stitched and empty squares. */
 export function outlineEdges(p: Pattern): { x1: number; y1: number; x2: number; y2: number }[] {
   const { width: w, height: h, cells } = p;
-  const filled = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h && cells[y * w + x] !== 0;
+  return edgesOf(w, h, (x, y) => x >= 0 && y >= 0 && x < w && y < h && cells[y * w + x] !== 0);
+}
+
+/** Grid-line segments along every boundary of the region for which `filled` is true, joined into long runs. */
+export function edgesOf(w: number, h: number, filled: (x: number, y: number) => boolean): { x1: number; y1: number; x2: number; y2: number }[] {
   const out: { x1: number; y1: number; x2: number; y2: number }[] = [];
   for (let y = 0; y <= h; y++) {
     let start = -1;

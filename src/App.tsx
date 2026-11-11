@@ -6,7 +6,7 @@ import { ExportDialog, NewDialog, ResizeDialog } from './dialogs';
 import { ProjectsDialog, ReconvertDialog } from './extras';
 import { GuideDialog } from './guide';
 import {
-  S, Tool, commitFloating, copySelection, cutSelection, deleteSelection, emit, fitView, keys, nudgeSelection,
+  S, Tool, clearPatch, commitFloating, copySelection, patchAction, cutSelection, deleteSelection, emit, fitView, keys, nudgeSelection,
   openDialog, openFile, paste, redo, renamePattern, saveFile, selectAll, setTool, undo, useStore, zoomBy,
 } from './store';
 
@@ -22,6 +22,7 @@ const ICONS: Record<string, string> = {
   rect: 'M4 5h12v10H4z',
   ellipse: 'M10 4.500c3.600 0 6.500 2.500 6.500 5.500s-2.900 5.500-6.500 5.500S3.500 13 3.500 10 6.400 4.500 10 4.500z',
   select: 'M4 4h3M9 4h3M14 4h2v2M16 8v3M16 13v3h-2M12 16H9M7 16H4v-2M4 12V9M4 7V4',
+  shape: 'M4.500 8.500c-.500-3 2-5 5-4.500 2 .300 2.500 1.500 4.500 2 2.500.600 3 3 1.500 5.500-1.200 2-3 3.500-5.500 3.500-3.500 0-5-3-5.500-6.500z',
   backstitch: 'M3 15l4-9 5 6 5-8',
   pan: 'M10 2v16M2 10h16M10 2L8 4M10 2l2 2M10 18l-2-2M10 18l2-2M2 10l2-2M2 10l2 2M18 10l-2-2M18 10l-2 2',
   undo: 'M7 5L3 9l4 4M3 9h9a4 4 0 0 1 0 8H9',
@@ -48,6 +49,7 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: 'line', label: 'Line', key: 'L', hint: 'Drag to draw a straight line of stitches.' },
   { id: 'rect', label: 'Rectangle', key: 'R', hint: 'Drag to draw a rectangle. Hold Shift to fill it.' },
   { id: 'ellipse', label: 'Ellipse', key: 'U', hint: 'Drag to draw an ellipse or circle. Hold Shift to fill it.' },
+  { id: 'shape', label: 'Shape select', key: 'S', hint: 'Click a patch of color to select all of it; Shift-click adds more. Then fill, absorb, grow, shrink, smooth or outline it from the bar above.' },
   { id: 'select', label: 'Select', key: 'M', hint: 'Drag to select, drag inside to move. Copy, cut, paste and Delete work. Esc to finish.' },
   { id: 'backstitch', label: 'Backstitch', key: 'K', hint: 'Drag between grid corners to add an outline. Alt-click a line to remove it.' },
   { id: 'pan', label: 'Move view', key: 'H', hint: 'Drag to move around. Space-drag works with any tool.' },
@@ -93,8 +95,8 @@ export function App() {
       }
       else if (k === '[') { S.brush = Math.max(1, S.brush - 1); emit(false); }
       else if (k === ']') { S.brush = Math.min(8, S.brush + 1); emit(false); }
-      else if (k === 'delete' || k === 'backspace') deleteSelection();
-      else if (k === 'escape') { commitFloating(); S.selection = null; emit(false); }
+      else if (k === 'delete' || k === 'backspace') { if (S.patch) patchAction('erase'); else deleteSelection(); }
+      else if (k === 'escape') { clearPatch(); commitFloating(); S.selection = null; emit(false); }
       else return;
       e.preventDefault();
     };

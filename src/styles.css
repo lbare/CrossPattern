@@ -390,3 +390,5 @@ main { display: grid; grid-template-columns: 48px 1fr 264px; min-height: 0; }
 .arealist select { height: 24px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); font-size: 12px; max-width: 104px; }
 .arealist .btn.ghost { width: 22px; height: 22px; padding: 0; color: var(--muted); }
 .arealist li.new { color: var(--muted); }
+
+.selbar .dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(128, 128, 128, 0.6); display: inline-block; }
