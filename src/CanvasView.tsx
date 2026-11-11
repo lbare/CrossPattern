@@ -12,7 +12,7 @@ type CellFn = (x: number, y: number) => void;
 const BRUSH_TOOLS: Tool[] = ['pencil', 'eraser', 'recolor', 'tidy', 'restore', 'line'];
 
 type Drag =
-  | { mode: 'pan'; px: number; py: number; ox: number; oy: number }
+  | { mode: 'pan'; px: number; py: number; ox: number; oy: number; tap: { x: number; y: number } | null; far: boolean }
   | { mode: 'paint'; fn: CellFn; size: number; lx: number; ly: number }
   | { mode: 'shape' }
   | { mode: 'move'; sx: number; sy: number; fx: number; fy: number }
@@ -294,6 +294,28 @@ export function CanvasView() {
       return { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2 - r.left, cy: (a.y + b.y) / 2 - r.top };
     };
 
+    /** A tap or click that did not turn into a drag while looking around. */
+    const tapped = (x: number, y: number) => {
+      const p = S.pattern;
+      if (!inside(x, y)) return;
+      const i = y * p.width + x, id = p.cells[i];
+      if (!id) return;
+      if (S.stitchMode) {
+        pushUndo();
+        const done = doneMap();
+        done[i] = done[i] ? 0 : 1;
+        return emit();
+      }
+      // Say what the stitch is, and make it the current color so it is lit up in the color list.
+      const color = p.palette.find((c) => c.id === id);
+      if (!color) return;
+      let total = 0, stitched = 0;
+      for (let k = 0; k < p.cells.length; k++) if (p.cells[k] === id) { total++; if (p.done?.[k]) stitched++; }
+      S.colorId = id;
+      S.info = `${color.symbol}  ${color.hex.toUpperCase()} · ${total.toLocaleString()} stitches${stitched ? `, ${stitched.toLocaleString()} stitched` : ''} · column ${x + 1}, row ${y + 1}`;
+      emit(false);
+    };
+
     const down = (e: PointerEvent) => {
       const c = pos(e), p = S.pattern;
       canvas.setPointerCapture(e.pointerId);
@@ -309,8 +331,14 @@ export function CanvasView() {
         }
         if (touches.size > 2) return;
       }
-      if (e.button === 1 || (e.button === 0 && (S.tool === 'pan' || keys.space))) {
-        drag = { mode: 'pan', px: e.clientX, py: e.clientY, ox: S.view.ox, oy: S.view.oy };
+      if (S.info) { S.info = null; emit(false); }
+      // Moving the view: the middle button, Space, or the Move view tool. In stitch mode a click ticks a
+      // square instead, except on a touch screen, where a drag moves the view and a tap ticks.
+      const touch = e.pointerType === 'touch';
+      const pans = keys.space || (S.stitchMode ? touch : S.tool === 'pan');
+      if (e.button === 1 || (e.button === 0 && pans)) {
+        const tap = e.button === 0 && !keys.space ? { x: c.x, y: c.y } : null;
+        drag = { mode: 'pan', px: e.clientX, py: e.clientY, ox: S.view.ox, oy: S.view.oy, tap, far: false };
         canvas.style.cursor = 'grabbing';
         return;
       }
@@ -449,6 +477,8 @@ export function CanvasView() {
           break;
         }
         case 'pan':
+          if (Math.hypot(e.clientX - drag.px, e.clientY - drag.py) > 6) drag.far = true;
+          if (!drag.far) break;
           S.view.ox = drag.ox + e.clientX - drag.px;
           S.view.oy = drag.oy + e.clientY - drag.py;
           S.autoFit = false;
@@ -519,6 +549,7 @@ export function CanvasView() {
         emit();
       }
       if (drag?.mode === 'move') emit();
+      if (drag?.mode === 'pan' && drag.tap && !drag.far) tapped(drag.tap.x, drag.tap.y);
       drag = null;
       preview = null;
       updateCursor();

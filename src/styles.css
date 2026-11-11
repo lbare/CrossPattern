@@ -392,3 +392,29 @@ main { display: grid; grid-template-columns: 48px 1fr 264px; min-height: 0; }
 .arealist li.new { color: var(--muted); }
 
 .selbar .dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(128, 128, 128, 0.6); display: inline-block; }
+
+/* ---- Phones: looking at a pattern comes first ---- */
+html, body, #root { height: 100dvh; }
+.narrow-only.group { display: none; }
+button { touch-action: manipulation; }
+@media (max-width: 760px) {
+  .narrow-only.group { display: flex; }
+  .brand { display: none; }
+  /* The things you want while viewing come first in the scrolling top row; file and editing actions follow. */
+  .topbar .name { order: 0; width: 112px; }
+  .g-phone { order: 1; } .g-zoom { order: 2; } .g-view { order: 3; } .g-help { order: 4; }
+  .g-file { order: 5; } .g-convert { order: 6; } .g-undo { order: 7; }
+  .topbar .btn { height: 34px; }
+  .hide-tools main { grid-template-columns: minmax(0, 1fr); }
+  .hide-tools .tools { display: none; }
+  .status { white-space: normal; padding-bottom: calc(6px + env(safe-area-inset-bottom)); min-height: 34px; }
+  #status-pos, .status .grow { display: none; }
+  .selbar .btn.small { height: 30px; }
+  .modal { border-radius: 10px; }
+  .modal footer { flex-wrap: wrap; }
+  .library { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+}
+
+/* A dialog never grows wider than the screen, whatever is inside it. */
+.overlay { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+.modal { min-width: 0; }

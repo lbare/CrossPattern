@@ -46,7 +46,7 @@ one stitch, and bold lines mark every tenth.
 | Shape select | `S` | Click a patch of color to select all of it, then fill, absorb, erase, grow, shrink, smooth or outline it. |
 | Select | `M` | Drag to select, drag inside to move. Flip, rotate, copy, cut, crop from the bar that appears. |
 | Backstitch | `K` | Drag between grid corners to add an outline. Alt-click a line to remove it. |
-| Move view | `H` | Drag to pan. Space-drag works with any tool. |
+| Move view | `H` | Drag to pan; click a stitch to see its color, symbol and count. Space-drag works with any tool. |
 
 Other useful keys: `[` and `]` change brush size, `0` fits the pattern to the window, `+` and `-` zoom,
 `⌘/Ctrl Z` undoes, `⌘/Ctrl A` selects everything, arrow keys nudge a selection, and holding `P` shows the guide
@@ -126,12 +126,13 @@ Projects are stored in your browser's IndexedDB on your own computer. That means
 - Patterns can be up to 400 × 400 stitches.
 - Full stitches and backstitch only; no half or quarter stitches.
 - Colors are free RGB colors and are not matched to thread brands.
-- It is built for a mouse or trackpad. On a phone you can open a pattern, drag and pinch to look around, and
-  tick off stitches in Stitch mode; drawing and picture conversion are better on a computer.
+- It is built for a mouse or trackpad. On a phone it opens ready for looking at a pattern: drag to move, pinch
+  to zoom, tap a stitch to see what it is, and tap to tick stitches off in Stitch mode. The drawing tools are
+  behind a Tools button. Drawing and picture conversion are better on a computer.
 
 ## Running it yourself
 
-You need [Node.js](https://nodejs.org/) 20 or newer.
+You need [Node.js](https://nodejs.org/) 20 or newer (`node -v` to check; with nvm, `nvm use` picks it up).
 
 ```bash
 npm install
@@ -139,6 +140,13 @@ npm run dev
 ```
 
 Then open http://localhost:5173.
+
+```bash
+npm test
+```
+
+runs the automated tests (the pattern model, saving and loading, picture conversion and the marking tools).
+They also run before every deploy, so a failing test stops a broken build from going live.
 
 ```bash
 npm run build
@@ -163,6 +171,7 @@ It is a Vite + React + TypeScript app with no backend and no runtime dependencie
 | `src/extras.tsx`, `src/dialogs.tsx`, `src/guide.tsx` | Projects, re-convert, export, resize and the built-in guide. |
 | `src/print.ts` | The multi-page printable chart. |
 | `src/db.ts` | The IndexedDB project library and saved conversions. |
+| `src/*.test.ts` | Automated tests. |
 
 ### Deployment
 

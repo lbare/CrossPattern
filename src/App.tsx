@@ -52,7 +52,7 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: 'shape', label: 'Shape select', key: 'S', hint: 'Click a patch of color to select all of it; Shift-click adds more. Then fill, absorb, grow, shrink, smooth or outline it from the bar above.' },
   { id: 'select', label: 'Select', key: 'M', hint: 'Drag to select, drag inside to move. Copy, cut, paste and Delete work. Esc to finish.' },
   { id: 'backstitch', label: 'Backstitch', key: 'K', hint: 'Drag between grid corners to add an outline. Alt-click a line to remove it.' },
-  { id: 'pan', label: 'Move view', key: 'H', hint: 'Drag to move around. Space-drag works with any tool.' },
+  { id: 'pan', label: 'Move view', key: 'H', hint: 'Drag to move around; click a stitch to see its color and count. Space-drag works with any tool.' },
 ];
 
 
@@ -129,7 +129,7 @@ export function App() {
 
   return (
     <div
-      className={'app' + (S.panelOpen ? ' show-panel' : '')}
+      className={'app' + (S.panelOpen ? ' show-panel' : '') + (S.toolsOpen ? '' : ' hide-tools')}
       onDragOver={(e) => { if (!dialog) e.preventDefault(); }}
       onDrop={async (e) => {
         if (dialog) return;
@@ -148,7 +148,17 @@ export function App() {
           onChange={(e) => renamePattern(e.target.value)}
           aria-label="Pattern name"
         />
-        <div className="group">
+        <div className="group g-phone narrow-only">
+          <button className={'btn' + (S.panelOpen ? ' on' : '')} onClick={() => { S.panelOpen = !S.panelOpen; emit(false); }}>Colors</button>
+          <button
+            className={'btn' + (S.toolsOpen ? ' on' : '')}
+            title="Show or hide the drawing tools"
+            onClick={() => { S.toolsOpen = !S.toolsOpen; if (!S.toolsOpen) setTool('pan'); else emit(false); }}
+          >
+            Tools
+          </button>
+        </div>
+        <div className="group g-file">
           <button className="btn" onClick={() => setDialog('projects')} title="All your projects in this browser">Projects</button>
           <button className="btn" onClick={() => setDialog('new')}>New</button>
           <button className="btn" onClick={() => fileInput.current?.click()}>Open</button>
@@ -166,23 +176,23 @@ export function App() {
             }}
           />
         </div>
-        <div className="group">
+        <div className="group g-convert">
           <button className="btn primary" onClick={() => setDialog('import')}>Convert picture</button>
           <button className="btn" onClick={() => setDialog('export')}>Export</button>
           <button className="btn" onClick={() => setDialog('resize')} title="Change the canvas size">
             {p.width} × {p.height}
           </button>
         </div>
-        <div className="group">
+        <div className="group g-undo">
           <button className="btn icon" onClick={undo} disabled={!S.undo.length} title="Undo (⌘Z)"><Icon name="undo" /></button>
           <button className="btn icon" onClick={redo} disabled={!S.redo.length} title="Redo (⇧⌘Z)"><Icon name="redo" /></button>
         </div>
-        <div className="group">
+        <div className="group g-zoom">
           <button className="btn icon" onClick={() => zoomBy(0.8)} title="Zoom out (-)">−</button>
           <button className="btn zoom" onClick={fitView} title="Fit to window (0)">{Math.round((S.view.scale / 16) * 100)}%</button>
           <button className="btn icon" onClick={() => zoomBy(1.25)} title="Zoom in (+)">+</button>
         </div>
-        <div className="group">
+        <div className="group g-view">
           <button className={'btn' + (S.showSymbols ? ' on' : '')} onClick={() => { S.showSymbols = !S.showSymbols; emit(false); }}>
             Symbols
           </button>
@@ -199,16 +209,13 @@ export function App() {
           <button
             className={'btn' + (S.stitchMode ? ' on' : '')}
             title="Track your real-life progress: click squares to tick them off as stitched"
-            onClick={() => { commitFloating(); S.selection = null; S.stitchMode = !S.stitchMode; emit(false); }}
+            onClick={() => { commitFloating(); S.selection = null; S.patch = null; S.info = null; S.stitchMode = !S.stitchMode; emit(false); }}
           >
             Stitch mode
           </button>
         </div>
-        <div className="group">
+        <div className="group g-help">
           <button className="btn" onClick={() => setDialog('help')} title="How everything works, and keyboard shortcuts (?)">Guide</button>
-          <button className={'btn narrow-only' + (S.panelOpen ? ' on' : '')} onClick={() => { S.panelOpen = !S.panelOpen; emit(false); }}>
-            Colors
-          </button>
         </div>
       </header>
 
@@ -240,7 +247,12 @@ export function App() {
       <footer className="status">
         <span>
           {error ? <span className="error">{error}</span>
-            : S.stitchMode ? <><b>Stitch mode</b> — Click or drag to tick squares off as stitched; click again to untick. Shift-click ticks a whole patch.</>
+            : !S.storageOk ? <span className="error">This browser window is not saving projects (private browsing?). Use Save to keep a file.</span>
+            : S.info ? <b>{S.info}</b>
+            : S.stitchMode ? (S.touch
+              ? <><b>Stitch mode</b> — Tap a square to tick it off as stitched; tap again to untick. Drag to move, pinch to zoom.</>
+              : <><b>Stitch mode</b> — Click or drag to tick squares off as stitched; click again to untick. Shift-click ticks a whole patch.</>)
+            : S.tool === 'pan' && S.touch ? <><b>Looking around</b> — Drag to move, pinch to zoom, tap a stitch to see its color.</>
             : <><b>{tool.label}</b> — {tool.hint}</>}
         </span>
         <span className="grow" />

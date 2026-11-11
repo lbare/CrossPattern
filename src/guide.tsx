@@ -15,7 +15,7 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
     items: [
       ['Draw from scratch', 'Pick a color on the right, pick a tool on the left, and click or drag on the grid. Every square is one stitch. The bold lines mark every tenth stitch.'],
       ['Start from a picture', 'Press Convert picture, choose a photo, crop it to the size you want to stitch, then mark what to keep, flatten or remove. See "Converting a picture".'],
-      ['Moving around', 'Scroll to move, pinch or hold ⌘/Ctrl while scrolling to zoom, and press 0 to fit the pattern to the window. Hold Space and drag to move with any tool.'],
+      ['Moving around', 'Scroll to move, pinch or hold ⌘/Ctrl while scrolling to zoom, and press 0 to fit the pattern to the window. Hold Space and drag to move with any tool. With the Move view tool, clicking a stitch tells you its color, symbol and how many there are.'],
       ['Nothing is lost', 'Every change is saved automatically, and Undo (⌘/Ctrl Z) goes back up to 100 steps.'],
     ],
   },
@@ -82,7 +82,7 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
       ['Whole patches', 'Shift-click ticks off the whole connected patch of one color.'],
       ['Progress', 'The palette shows stitched and total counts per color, and the bottom of the panel shows overall progress. Progress is saved with the project.'],
       ['Symbols', 'Turn on Symbols to see each color\'s chart symbol in its squares, which helps tell similar shades apart.'],
-      ['On a phone', 'The pattern opens ready to look around: drag to move and pinch to zoom. Stitch mode works with a tap, so you can tick off stitches from the sofa. Colors opens the palette.'],
+      ['On a phone', 'A pattern opens ready to look at: drag to move, pinch to zoom, and tap a stitch to see its color, symbol and count. In Stitch mode a tap ticks a square off and a drag still moves the view. Colors opens the palette, and Tools brings out the drawing tools if you want them. Converting pictures and detailed drawing are easier on a computer.'],
     ],
   },
   {

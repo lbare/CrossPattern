@@ -143,7 +143,7 @@ function MarkCanvas(props: {
     // For a snapping stroke: where the brush has been, and the marks as they were before it began.
     path: [] as [number, number][], before: null as Uint8Array | null,
     // For the shapes tool: the shape under the cursor and the last one marked in this drag.
-    hoverShape: -1, lastShape: -1,
+    hoverShape: -1, lastShape: -1, entered: [0, 0] as [number, number],
   });
 
   /** Keeps the picture covering the box: no zooming out past 1 and no dragging it off the edge. */
@@ -237,11 +237,15 @@ function MarkCanvas(props: {
     }
     const [x, y] = at(e);
     s.hover = [x, y];
+    const was = s.hoverShape;
     s.hoverShape = tool === 'shapes' ? shapeAt(x, y) : -1;
+    if (s.hoverShape !== was) s.entered = [x, y];
     if (s.drawing) {
       if (tool === 'shapes') {
-        // Dragging across shapes marks each one the cursor enters.
-        if (shapes && s.hoverShape !== s.lastShape) { fillShape(labels, shapes, x, y, target); s.lastShape = s.hoverShape; }
+        // Dragging across shapes marks each one, once the cursor is properly inside it. Brushing a
+        // neighbour's edge on the way past does not count.
+        const deep = Math.hypot(x - s.entered[0], y - s.entered[1]) >= 6;
+        if (shapes && deep && s.hoverShape !== s.lastShape) { fillShape(labels, shapes, x, y, target); s.lastShape = s.hoverShape; }
       } else if (tool === 'brush' && s.before) {
         // Redo the whole stroke from the saved marks each time, so the snapped edge follows the brush live.
         if (Math.hypot(x - s.lx, y - s.ly) < Math.max(1, brush / 4)) return paint();

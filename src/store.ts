@@ -65,6 +65,14 @@ export const S = {
   selection: null as Rect | null,
   /** Stitches picked with the Shape select tool: 1 per selected square, and how many there are. */
   patch: null as { mask: Uint8Array; count: number } | null,
+  /** On a phone the drawing tools are tucked away until asked for; this is whether they are showing. */
+  toolsOpen: false,
+  /** A line about the stitch that was last tapped while looking around, shown in the status bar. */
+  info: null as string | null,
+  /** False when the browser refuses to store projects (some private windows), so the user can be told. */
+  storageOk: true,
+  /** True on touch-first devices such as phones and tablets. */
+  touch: typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches,
   floating: null as Floating | null,
   view: { scale: 16, ox: 40, oy: 40 },
   /** True while the view is still the automatic fit, so it can follow window resizes. */
@@ -140,7 +148,10 @@ function autosave(leaving = false): Promise<unknown> {
       try { localStorage.setItem(DRAFT_KEY, draft(serialize(patternForSaving(), false))); } catch { /* blocked */ }
     }
   }
-  return putProject(rec).catch(() => {});
+  return putProject(rec).then(
+    () => { S.storageOk = true; },
+    () => { if (S.storageOk) { S.storageOk = false; emit(false); } },
+  );
 }
 // Don't lose the last half second of work when the tab is closed or reloaded.
 window.addEventListener('pagehide', () => { autosave(true); });
@@ -165,7 +176,7 @@ export async function initStore(): Promise<void> {
       const latest = (await listProjects())[0];
       if (latest) { id = latest.id; data = latest.data; }
     }
-  } catch { /* library unavailable; start blank */ }
+  } catch { S.storageOk = false; /* library unavailable; start blank */ }
   try { if (data) S.pattern = deserialize(data); } catch { /* damaged save; start blank */ }
   S.projectId = id ?? newId();
   localStorage.setItem(CURRENT_KEY, S.projectId);
@@ -206,8 +217,11 @@ function snapshot(): Snapshot {
 }
 
 function restore(s: Snapshot): void {
+  const resized = s.width !== S.pattern.width || s.height !== S.pattern.height;
   S.pattern = { ...s };
   fixCurrentColor();
+  // Stepping back over a crop or resize changes the canvas size, so the old zoom no longer shows it.
+  if (resized) fitView();
 }
 
 function fixCurrentColor(): void {
@@ -264,7 +278,9 @@ export function redo(): void {
 
 export function fitView(): void {
   const { w, h } = S.viewport, p = S.pattern;
-  const scale = clamp(Math.min((w - 80) / p.width, (h - 80) / p.height), 1, 40);
+  // Leave room for the row and column numbers, but not much of a small screen.
+  const margin = Math.min(80, Math.max(36, w * 0.1));
+  const scale = clamp(Math.min((w - margin) / p.width, (h - margin) / p.height), 1, 40);
   S.view = {
     scale,
     ox: Math.round((w - p.width * scale) / 2),
@@ -294,6 +310,7 @@ export function setTool(tool: Tool): void {
   if (tool === 'restore' && !S.pattern.reference?.converted) return;
   if (tool !== 'select') { commitFloating(); S.selection = null; }
   if (tool !== 'shape') S.patch = null;
+  S.info = null;
   S.tool = tool;
   emit(false);
 }
@@ -340,6 +357,7 @@ export function lockedIds(): Set<number> {
 
 export function selectAll(): void {
   commitFloating();
+  S.patch = null;
   S.tool = 'select';
   S.selection = { x: 0, y: 0, w: S.pattern.width, h: S.pattern.height };
   emit(false);
@@ -512,6 +530,7 @@ export function paste(): void {
   const y = Math.max(0, Math.floor(-S.view.oy / S.view.scale) + 1);
   S.floating = { x, y, w: clipboard.w, h: clipboard.h, data };
   S.selection = { x, y, w: clipboard.w, h: clipboard.h };
+  S.patch = null;
   S.tool = 'select';
   emit(false);
 }
@@ -896,7 +915,10 @@ export function patchAction(kind: PatchAction): void {
       }
     }
   } else if (kind === 'outline' && S.colorId) {
-    const inSel = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h && mask[y * w + x] === 1;
+    // Selected empty fabric is outlined only where it meets stitches, not along the edge of the canvas.
+    let fabricOnly = true;
+    for (let i = 0; i < n && fabricOnly; i++) if (mask[i] && was[i]) fabricOnly = false;
+    const inSel = (x: number, y: number) => (x >= 0 && y >= 0 && x < w && y < h ? mask[y * w + x] === 1 : fabricOnly);
     p.backstitches.push(...edgesOf(w, h, inSel).map((e) => ({ ...e, colorId: S.colorId })));
   }
   sel.count = mask.reduce((a, v) => a + v, 0);

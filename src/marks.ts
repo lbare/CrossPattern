@@ -169,7 +169,8 @@ export function compose(base: Base, m: LabelMap, out: ImageData, shapes?: Shapes
   for (let i = 0; i < n; i++) {
     const l = m.data[i], o = i * 4;
     let r = src[o], g = src[o + 1], b = src[o + 2];
-    if (l === REMOVE) {
+    // Transparent parts of the picture have nothing to stitch, so they look removed too.
+    if (l === REMOVE || src[o + 3] < 128) {
       const x = i % m.w, y = (i / m.w) | 0;
       const v = ((x >> 3) + (y >> 3)) & 1 ? 236 : 204;
       r = r * 0.12 + v * 0.88; g = g * 0.12 + v * 0.88; b = b * 0.12 + v * 0.88;
