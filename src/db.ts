@@ -24,7 +24,7 @@ export interface ConversionRecord {
   crop: { x: number; y: number; w: number; h: number };
   step: 'crop' | 'areas';
   labels: { w: number; h: number; data: Uint8Array; crop: { x: number; y: number; w: number; h: number } } | null;
-  settings: Record<string, number | boolean>;
+  settings: Record<string, unknown>;
   updatedAt: number;
 }
 

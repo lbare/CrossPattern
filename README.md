@@ -12,8 +12,8 @@ There is nothing to install and no account. Your patterns stay in your own brows
 ## What it does
 
 - **Grid editor**: pencil, eraser, fill, line, rectangle, ellipse, select and move, and backstitch outlines.
-- **Picture conversion**: crop a photo to the exact stitch count you want, then mark areas to remove, redraw
-  as a cartoon, flatten to one color, or keep in detail before the colors are reduced. It is saved as you go.
+- **Picture conversion**: crop a photo to the exact stitch count you want, click the shapes that matter into
+  areas, choose how much detail each area keeps, and remove the rest. It is saved as you go.
 - **Fine-tuning**: show the original photo over the pattern, repaint single colors, tidy noisy patches, bring
   back parts of the first conversion, or re-convert just one area with different settings.
 - **Colors**: any color you like, each with a chart symbol and a live stitch count. Highlight, lock, merge,
@@ -55,35 +55,30 @@ picture in full. **Mirror** in the top bar repeats everything you paint on the o
 
 Press **Convert picture** and choose, drop or paste an image.
 
-![Marking a photo: the kitten, plant and pot are cartoon areas and the background is removed](docs/convert.png)
+![Marking a photo: the kitten, plant and pot are three areas and the background is removed](docs/convert.png)
 
 1. **Crop and size.** Type the width and height in stitches. The crop box takes that shape; drag it or a corner
    to choose what goes in. You see the total stitch count and the finished size on your fabric count.
-2. **Areas and colors.** Paint marks on the photo to tell the converter what matters:
-   - **Remove** leaves the area as empty fabric.
-   - **Cartoon** redraws an area like a drawing: lighting evened out, color strengthened, a few flat tones of
-     its own, and an optional dark outline. Mark each object as its own area.
-   - **One color** turns each marked area into a single solid color.
-   - **Keep detail** protects the area from simplifying and gives it priority when colors are chosen.
+2. **Areas and colors.** There are only three things to mark on the photo:
+   - **An area** is one thing in the picture: the cat, a leaf, the pot. Each area gets colors of its own and
+     its own level of detail: 1 flat color, 2 to 6 tones, or full detail.
+   - **Remove** leaves a part as empty fabric.
+   - **Unmark** clears a mark.
 
-   Marks can be made with a brush, a lasso, or a magic wand that grabs a connected area of similar color.
-   The brush snaps to edges by default: paint roughly along the middle of something and the mark spreads to
-   its edges and pulls back from what you overshoot. Untick "Snap to edges" for plain freehand painting.
-   "Remove everything unmarked" cuts out a background in one click once the subject is marked.
+   The photo is split into its obvious **shapes** for you: move over it to see them, click one to mark it, or
+   drag across several. For anything the shapes miss there is a brush that snaps to edges and a lasso.
+   "Remove the rest" cuts out the background in one click once your areas are marked.
 
-   Then set the number of colors, how strongly to flatten unmarked areas, and how much to clear stray stitches.
-   "Adjust the photo" lifts shadows and changes brightness, contrast and color strength first.
-
+   Then set how many colors the unmarked parts get, how strongly to flatten them, and how much to clear stray
+   stitches. "Adjust the photo" lifts shadows and changes brightness, contrast and color strength first.
    Pinch or ⌘/Ctrl-scroll over the photo to zoom in for small features.
 
 The conversion is saved as you work: close the window or refresh the page and it is still there. A pattern
 also remembers the conversion it came from, so "Edit conversion" in the right panel reopens it later.
 
-If a photo comes out as a muddy jumble (a subject in shadow, a busy background), mark each object as a
-Cartoon area and remove the rest. That gives every object its own colors instead of making them compete.
-
-A good order for a portrait or a pet: remove the background, keep detail on eyes, nose and edges, leave fur or
-skin unmarked so it flattens, then lower the color count until it looks right.
+A good order: click the main subject as one area and give it 3 or 4 tones, add other objects as their own
+areas with fewer tones, remove the rest, then adjust each area's detail until it looks right. Because every
+area has its own colors, a subject in shadow is not drowned out by a busy background.
 
 ### Fine-tuning afterwards
 
@@ -159,7 +154,7 @@ It is a Vite + React + TypeScript app with no backend and no runtime dependencie
 | `src/CanvasView.tsx` | The drawing surface: rendering, pointer handling, and all the tools. |
 | `src/render.ts` | Drawing a pattern to a canvas, for the screen, PNG export and print pages. |
 | `src/convert.ts` | Picture conversion: sampling, shadow lifting, edge-preserving smoothing, cartoon areas, k-means color reduction. |
-| `src/marks.ts` | The marks painted on a photo before conversion (brush, lasso, magic wand). |
+| `src/marks.ts` | Marking a photo before conversion: shape detection, areas, the edge-snapping brush and lasso. |
 | `src/ImportDialog.tsx` | The two-step picture conversion dialog. |
 | `src/PalettePanel.tsx` | The right-hand panel: guide picture, colors, simplify tools, progress. |
 | `src/extras.tsx`, `src/dialogs.tsx`, `src/guide.tsx` | Projects, re-convert, export, resize and the built-in guide. |

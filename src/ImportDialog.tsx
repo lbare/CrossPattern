@@ -4,8 +4,8 @@ import { quantize, resultToImageData, sampleImage } from './convert';
 import { Modal } from './dialogs';
 import { ConversionRecord, DRAFT, deleteConversion, getConversion, putConversion } from './db';
 import {
-  Base, CARTOON0, Crop, DETAIL, FLAT0, LabelMap, NONE, REMOVE, compose, fillPolygon, fillUnmarked, makeBase,
-  makeLabels, nextCartoonId, nextFlatId, remapLabels, snapStroke, stamp, stampLine, wand,
+  Base, CARTOON0, Crop, FLAT0, LabelMap, NONE, REMOVE, Shapes, areaIds, areaTint, compose, fillPolygon, fillShape,
+  fillUnmarked, findShapes, makeBase, makeLabels, nextCartoonId, remapLabels, snapStroke, stamp, stampLine,
 } from './marks';
 import { MAX_SIZE, paletteFromHexes } from './model';
 import { FABRIC } from './render';
@@ -118,32 +118,32 @@ function CropBox(props: { img: HTMLImageElement; crop: Crop; aspect: number; onC
 
 // ---- Step 2: mark areas -------------------------------------------------
 
-type Mode = 'remove' | 'cartoon' | 'flat' | 'detail' | 'erase';
-type MarkTool = 'brush' | 'lasso' | 'wand';
+type Mode = 'area' | 'remove' | 'erase';
+type MarkTool = 'shapes' | 'brush' | 'lasso';
 
 const MODE_HELP: Record<Mode, string> = {
+  area: 'An area is one thing in the picture: the cat, a leaf, the pot. Each area gets colors of its own, and you choose how much detail it keeps.',
   remove: 'Left as empty fabric. Use for the background so the subject keeps a clean outline.',
-  cartoon: 'Redrawn like a drawing: lighting evened out and reduced to a few flat tones of its own. Mark each object (the cat, the plant) as a separate area.',
-  flat: 'Each area you mark becomes one solid color. Start inside an existing area to add to it.',
-  detail: 'Protected from simplifying, and given priority when colors are chosen. Use on eyes, nose and edges that must stay crisp.',
-  erase: 'Clears marks, returning the area to normal conversion.',
+  erase: 'Clears marks, returning that part to normal conversion.',
 };
 
 interface View { z: number; x: number; y: number }
 
 function MarkCanvas(props: {
-  base: Base; labels: LabelMap; mode: Mode; tool: MarkTool; brush: number; tol: number; snap: boolean; version: number;
-  onBefore: () => void; onChange: () => void;
+  base: Base; labels: LabelMap; shapes: Shapes | null; target: number; tool: MarkTool; brush: number; tol: number;
+  snap: boolean; version: number; onBefore: () => void; onChange: () => void;
 }) {
-  const { base, labels, mode, tool, brush } = props;
+  const { base, labels, shapes, target, tool, brush } = props;
   const ref = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ z: 1, x: 0, y: 0 });
   const st = useRef({
-    drawing: false, label: 0, lx: 0, ly: 0, pts: [] as [number, number][], hover: null as [number, number] | null,
+    drawing: false, lx: 0, ly: 0, pts: [] as [number, number][], hover: null as [number, number] | null,
     out: null as ImageData | null, pan: null as { sx: number; sy: number; x: number; y: number } | null,
     // For a snapping stroke: where the brush has been, and the marks as they were before it began.
     path: [] as [number, number][], before: null as Uint8Array | null,
+    // For the shapes tool: the shape under the cursor and the last one marked in this drag.
+    hoverShape: -1, lastShape: -1,
   });
 
   /** Keeps the picture covering the box: no zooming out past 1 and no dragging it off the edge. */
@@ -178,7 +178,7 @@ function MarkCanvas(props: {
     if (!c) return;
     const s = st.current, g = c.getContext('2d')!;
     if (!s.out || s.out.width !== labels.w || s.out.height !== labels.h) s.out = new ImageData(labels.w, labels.h);
-    compose(base, labels, s.out);
+    compose(base, labels, s.out, tool === 'shapes' ? shapes : null, s.hoverShape);
     g.putImageData(s.out, 0, 0);
     const outline = (draw: () => void) => {
       g.lineWidth = 3 / view.z; g.strokeStyle = 'rgba(0,0,0,0.7)'; draw();
@@ -197,22 +197,14 @@ function MarkCanvas(props: {
     }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(paint, [base, labels, props.version, tool, brush, view.z]);
+  useEffect(paint, [base, labels, shapes, props.version, tool, brush, view.z]);
 
   const at = (e: RPointerEvent): [number, number] => {
     const r = ref.current!.getBoundingClientRect();
     return [((e.clientX - r.left) * labels.w) / r.width, ((e.clientY - r.top) * labels.h) / r.height];
   };
-  const labelAt = (x: number, y: number) => {
-    if (mode === 'remove') return REMOVE;
-    if (mode === 'detail') return DETAIL;
-    if (mode === 'erase') return NONE;
-    const ix = clamp(Math.floor(x), 0, labels.w - 1), iy = clamp(Math.floor(y), 0, labels.h - 1);
-    const under = labels.data[iy * labels.w + ix];
-    // Starting on an area of the same kind adds to it; starting anywhere else begins a new area.
-    if (mode === 'cartoon') return under >= CARTOON0 ? under : nextCartoonId(labels);
-    return under >= FLAT0 && under < CARTOON0 ? under : nextFlatId(labels);
-  };
+  const shapeAt = (x: number, y: number) =>
+    shapes ? shapes.id[clamp(Math.floor(y), 0, labels.h - 1) * labels.w + clamp(Math.floor(x), 0, labels.w - 1)] : -1;
 
   const down = (e: RPointerEvent) => {
     const s = st.current;
@@ -224,19 +216,15 @@ function MarkCanvas(props: {
     if (e.button !== 0) return;
     const [x, y] = at(e);
     props.onBefore();
-    s.label = labelAt(x, y);
-    if (tool === 'wand') {
-      wand(labels, base, x, y, props.tol * 0.003, s.label);
-      props.onChange();
-      return paint();
-    }
     s.drawing = true;
     s.lx = x; s.ly = y;
-    if (tool === 'brush' && props.snap) {
+    if (tool === 'shapes') {
+      if (shapes) { fillShape(labels, shapes, x, y, target); s.lastShape = shapeAt(x, y); }
+    } else if (tool === 'brush' && props.snap) {
       s.before = labels.data.slice();
       s.path = [[x, y]];
-      snapStroke(labels, base, s.path, brush, props.tol * 0.003, s.label);
-    } else if (tool === 'brush') stamp(labels, x, y, brush, s.label);
+      snapStroke(labels, base, s.path, brush, props.tol * 0.003, target);
+    } else if (tool === 'brush') stamp(labels, x, y, brush, target);
     else s.pts = [[x, y]];
     paint();
   };
@@ -249,14 +237,18 @@ function MarkCanvas(props: {
     }
     const [x, y] = at(e);
     s.hover = [x, y];
+    s.hoverShape = tool === 'shapes' ? shapeAt(x, y) : -1;
     if (s.drawing) {
-      if (tool === 'brush' && s.before) {
+      if (tool === 'shapes') {
+        // Dragging across shapes marks each one the cursor enters.
+        if (shapes && s.hoverShape !== s.lastShape) { fillShape(labels, shapes, x, y, target); s.lastShape = s.hoverShape; }
+      } else if (tool === 'brush' && s.before) {
         // Redo the whole stroke from the saved marks each time, so the snapped edge follows the brush live.
         if (Math.hypot(x - s.lx, y - s.ly) < Math.max(1, brush / 4)) return paint();
         s.path.push([x, y]);
         labels.data.set(s.before);
-        snapStroke(labels, base, s.path, brush, props.tol * 0.003, s.label);
-      } else if (tool === 'brush') stampLine(labels, s.lx, s.ly, x, y, brush, s.label);
+        snapStroke(labels, base, s.path, brush, props.tol * 0.003, target);
+      } else if (tool === 'brush') stampLine(labels, s.lx, s.ly, x, y, brush, target);
       else s.pts.push([x, y]);
       s.lx = x; s.ly = y;
     }
@@ -266,11 +258,12 @@ function MarkCanvas(props: {
     const s = st.current;
     s.pan = null;
     if (!s.drawing) return;
-    if (tool === 'lasso' && s.pts.length > 2) fillPolygon(labels, s.pts, s.label);
+    if (tool === 'lasso' && s.pts.length > 2) fillPolygon(labels, s.pts, target);
     s.drawing = false;
     s.pts = [];
     s.path = [];
     s.before = null;
+    s.lastShape = -1;
     props.onChange();
     paint();
   };
@@ -287,7 +280,7 @@ function MarkCanvas(props: {
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={up}
-        onPointerLeave={() => { st.current.hover = null; paint(); }}
+        onPointerLeave={() => { st.current.hover = null; st.current.hoverShape = -1; paint(); }}
         onContextMenu={(e) => e.preventDefault()}
       />
       <div className="zoombar">
@@ -303,8 +296,14 @@ function MarkCanvas(props: {
 
 const DEFAULTS = {
   colors: 10, smooth: 2, clean: 1, brightness: 0, contrast: 0, saturation: 0, lift: 0, tones: 3, outline: true, evenLight: true,
+  /** Detail chosen for each area: 1-6 flat tones, or 0 for full detail. */
+  areaTones: {} as Record<number, number>,
 };
 type Settings = typeof DEFAULTS;
+
+const DETAIL_CHOICES: [number, string][] = [
+  [1, '1 flat color'], [2, '2 tones'], [3, '3 tones'], [4, '4 tones'], [5, '5 tones'], [6, '6 tones'], [0, 'Full detail'],
+];
 
 /** Remembered across a refresh so an unfinished conversion reopens by itself. */
 export const CONVERTING_KEY = 'crosspattern.converting';
@@ -329,8 +328,11 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   const [set, setSet] = useState<Settings>(DEFAULTS);
   const change = (patch: Partial<Settings>) => setSet((s) => ({ ...s, ...patch }));
 
-  const [mode, setMode] = useState<Mode>('remove');
-  const [tool, setTool] = useState<MarkTool>('brush');
+  const [mode, setMode] = useState<Mode>('area');
+  const [tool, setTool] = useState<MarkTool>('shapes');
+  /** The area new marks are added to, or null to start a new one with the next mark. */
+  const [current, setCurrent] = useState<number | null>(null);
+  const [shapeSize, setShapeSize] = useState(5);
   const [brush, setBrush] = useState(16);
   const [tol, setTol] = useState(30);
   const [snap, setSnap] = useState(true);
@@ -474,6 +476,8 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [img, labels],
   );
+  const dShapeSize = useDeferredValue(shapeSize);
+  const shapes = useMemo(() => (base && labels ? findShapes(base, labels.w, labels.h, dShapeSize) : null), [base, labels, dShapeSize]);
   const sampled = useMemo(
     () => (img && labels ? sampleImage(img, crop, w, h, labels) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -482,7 +486,15 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   // Sliders stay responsive while the conversion catches up.
   const dSet = useDeferredValue(set);
   const result = useMemo(() => (sampled ? quantize(sampled, dSet) : null), [sampled, dSet]);
-  const hasCartoon = useMemo(() => !!sampled && sampled.label.some((l) => l >= CARTOON0), [sampled]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const areas = useMemo(() => (labels ? areaIds(labels) : []), [labels, version]);
+  const tonesOf = (id: number) => set.areaTones[id] ?? (id < CARTOON0 ? 1 : set.tones);
+  // What the next mark paints: the chosen area (a fresh one if none is chosen), removal, or nothing.
+  const target = !labels ? NONE : mode === 'remove' ? REMOVE : mode === 'erase' ? NONE : current ?? nextCartoonId(labels);
+  const marked = () => {
+    if (mode === 'area' && current === null) setCurrent(target);
+    bump();
+  };
 
   useEffect(() => {
     const c = out.current;
@@ -502,6 +514,10 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
     if (!labels) return;
     history.current.push(labels.data.slice());
     if (history.current.length > 40) history.current.shift();
+  };
+  const removeArea = (id: number) => {
+    edit_((m) => { for (let i = 0; i < m.data.length; i++) if (m.data[i] === id) m.data[i] = NONE; });
+    if (current === id) setCurrent(null);
   };
 
   const create = async () => {
@@ -536,11 +552,6 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
       <input type="file" accept="image/*" hidden onChange={(e) => take(e.target.files?.[0], e.target.files?.[0]?.name)} />
     </label>
   );
-  const fillLabel = (m: LabelMap) => (mode === 'remove' ? REMOVE : mode === 'detail' ? DETAIL : mode === 'cartoon' ? nextCartoonId(m) : nextFlatId(m));
-  const FILL_TEXT: Record<Mode, string> = {
-    remove: 'Remove everything unmarked', cartoon: 'Make everything unmarked one cartoon area',
-    flat: 'Make everything unmarked one color', detail: 'Keep detail everywhere unmarked', erase: '',
-  };
   const adjusted = set.brightness || set.contrast || set.saturation || set.lift;
 
   return (
@@ -622,15 +633,43 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
           <div className="areas">
             <div className="controls">
               <div className="block">
-                <h3>Mark areas on the photo</h3>
-                <Segmented
-                  wrap
-                  value={mode}
-                  set={setMode}
-                  options={[['remove', 'Remove'], ['cartoon', 'Cartoon'], ['flat', 'One color'], ['detail', 'Keep detail'], ['erase', 'Unmark']]}
-                />
-                <p className="hint mode-help">{MODE_HELP[mode]}</p>
-                <Segmented value={tool} set={setTool} options={[['brush', 'Brush'], ['lasso', 'Lasso'], ['wand', 'Magic wand']]} />
+                <h3>1. What are you marking?</h3>
+                <Segmented value={mode} set={setMode} options={[['area', 'An area'], ['remove', 'Remove'], ['erase', 'Unmark']]} />
+                <p className="hint">{MODE_HELP[mode]}</p>
+                {(areas.length > 0 || mode === 'area') && (
+                  <ul className="arealist">
+                    {areas.map((id, n) => {
+                      const [r, g, b] = areaTint(id);
+                      return (
+                        <li key={id} className={mode === 'area' && current === id ? 'on' : ''} onClick={() => { setMode('area'); setCurrent(id); }}>
+                          <span className="chip" style={{ background: `rgb(${r},${g},${b})` }} />
+                          <span className="grow">Area {n + 1}</span>
+                          <select
+                            value={tonesOf(id)}
+                            title="How much detail this area keeps"
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => change({ areaTones: { ...set.areaTones, [id]: Number(e.target.value) } })}
+                          >
+                            {DETAIL_CHOICES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                          </select>
+                          <button className="btn ghost small" title="Unmark this area" onClick={(e) => { e.stopPropagation(); removeArea(id); }}>✕</button>
+                        </li>
+                      );
+                    })}
+                    <li className={'new' + (mode === 'area' && current === null ? ' on' : '')} onClick={() => { setMode('area'); setCurrent(null); }}>
+                      <span className="chip plus">+</span>
+                      <span className="grow">{areas.length ? 'New area' : 'Your first area: mark it on the photo'}</span>
+                    </li>
+                  </ul>
+                )}
+              </div>
+              <div className="block">
+                <h3>2. Mark it on the photo</h3>
+                <Segmented value={tool} set={setTool} options={[['shapes', 'Shapes'], ['brush', 'Brush'], ['lasso', 'Lasso']]} />
+                {tool === 'shapes' && (
+                  <Slider label="Shape size" value={shapeSize} min={1} max={10} set={setShapeSize}
+                    hint="Click a shape on the photo, or drag across several. Smaller shapes follow finer edges." />
+                )}
                 {tool === 'brush' && <Slider label="Brush size" value={brush} min={2} max={60} set={setBrush} />}
                 {tool === 'brush' && (
                   <label className="check" title="The mark spreads to the edges of what you paint on, and pulls back from what you overshoot">
@@ -639,47 +678,39 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
                 )}
                 {tool === 'brush' && snap && (
                   <Slider label="Edge sensitivity" value={tol} min={2} max={100} set={setTol}
-                    hint="Paint along the middle of an area. Lower stops at fainter edges; higher spreads further." />
+                    hint="Lower stops at fainter edges; higher spreads further." />
                 )}
-                {tool === 'lasso' && <p className="hint">Draw around an area; everything inside is marked.</p>}
-                {tool === 'wand' && (
-                  <Slider label="Tolerance" value={tol} min={2} max={100} set={setTol}
-                    hint="Click a spot to mark the connected area of similar color. Higher reaches further." />
-                )}
+                {tool === 'lasso' && <p className="hint">Draw around something; everything inside is marked.</p>}
                 <div className="row">
                   <button className="btn small" disabled={!history.current.length} onClick={undoMark}>Undo</button>
-                  <button className="btn small" onClick={() => edit_((m) => m.data.fill(NONE))}>Clear all</button>
+                  <button className="btn small" onClick={() => { edit_((m) => m.data.fill(NONE)); setCurrent(null); }}>Clear all</button>
+                  {mode !== 'erase' && (
+                    <button
+                      className="btn small"
+                      title="Applies this to everything you have not marked yet"
+                      onClick={() => { edit_((m) => fillUnmarked(m, target)); marked(); }}
+                    >
+                      {mode === 'remove' ? 'Remove the rest' : 'Add the rest'}
+                    </button>
+                  )}
                 </div>
-                {mode !== 'erase' && (
-                  <button
-                    className="btn small"
-                    title="Applies the chosen mark to everything you have not marked yet"
-                    onClick={() => edit_((m) => fillUnmarked(m, fillLabel(m)))}
-                  >
-                    {FILL_TEXT[mode]}
-                  </button>
-                )}
               </div>
-              {(hasCartoon || mode === 'cartoon') && (
-                <div className="block">
-                  <h3>Cartoon areas</h3>
-                  <Slider label="Tones per area" value={set.tones} min={2} max={6} set={(n) => change({ tones: n })}
-                    hint="Each cartoon area gets this many colors of its own." />
-                  <label className="check">
-                    <input type="checkbox" checked={set.outline} onChange={(e) => change({ outline: e.target.checked })} /> Dark outline around each area
-                  </label>
-                  <label className="check">
-                    <input type="checkbox" checked={set.evenLight} onChange={(e) => change({ evenLight: e.target.checked })} /> Brighten areas that are in shadow
-                  </label>
-                </div>
-              )}
               <div className="block">
-                <h3>Colors and simplifying</h3>
-                <Slider label={hasCartoon ? 'Colors for the rest' : 'Colors'} value={set.colors} min={2} max={40} set={(n) => change({ colors: n })}
+                <h3>3. Colors and simplifying</h3>
+                <Slider label={areas.length ? 'Colors for unmarked parts' : 'Colors'} value={set.colors} min={2} max={40} set={(n) => change({ colors: n })}
                   hint={result ? `${result.palette.length} colors in the pattern` : undefined} />
-                <Slider label="Flatten unmarked areas" value={set.smooth} min={0} max={4} set={(n) => change({ smooth: n })}
-                  hint="Smooths texture and shading. Keep-detail areas are not touched." />
+                <Slider label="Flatten unmarked parts" value={set.smooth} min={0} max={4} set={(n) => change({ smooth: n })} />
                 <Slider label="Remove stray stitches" value={set.clean} min={0} max={3} set={(n) => change({ clean: n })} />
+                {areas.length > 0 && (
+                  <>
+                    <label className="check">
+                      <input type="checkbox" checked={set.outline} onChange={(e) => change({ outline: e.target.checked })} /> Dark outline around each area
+                    </label>
+                    <label className="check">
+                      <input type="checkbox" checked={set.evenLight} onChange={(e) => change({ evenLight: e.target.checked })} /> Brighten areas that are in shadow
+                    </label>
+                  </>
+                )}
                 <details className="adjust">
                   <summary>Adjust the photo{adjusted ? ' (changed)' : ''}</summary>
                   <Slider label="Lift shadows" value={set.lift} min={0} max={100} set={(n) => change({ lift: n })}
@@ -694,11 +725,11 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
             <figure>
               <div className="fit" style={fitStyle(labels.w / labels.h, 56)}>
                 <MarkCanvas
-                  base={base} labels={labels} mode={mode} tool={tool} brush={brush} tol={tol} snap={snap} version={version}
-                  onBefore={pushHistory} onChange={bump}
+                  base={base} labels={labels} shapes={shapes} target={target} tool={tool} brush={brush} tol={tol} snap={snap}
+                  version={version} onBefore={pushHistory} onChange={marked}
                 />
               </div>
-              <figcaption>Photo: paint to mark areas. Pinch or ⌘/Ctrl-scroll to zoom, scroll or Alt-drag to move.</figcaption>
+              <figcaption>Photo: mark things here. Pinch or ⌘/Ctrl-scroll to zoom, scroll or Alt-drag to move.</figcaption>
             </figure>
             <figure>
               <div className="fit" style={{ ...fitStyle(w / h, 56), background: FABRIC }}>

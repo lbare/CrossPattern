@@ -376,3 +376,17 @@ main { display: grid; grid-template-columns: 48px 1fr 264px; min-height: 0; }
 @media (max-width: 760px) { .steps .saved { display: none; } }
 
 .guide .shot { display: block; width: 100%; max-width: 74ch; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 16px; }
+
+/* ---- Areas list in the conversion step ---- */
+.arealist { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.arealist li {
+  display: flex; align-items: center; gap: 7px; padding: 3px 4px 3px 6px; border: 1px solid transparent; border-radius: 6px;
+  cursor: pointer; font-size: 12px; color: var(--text);
+}
+.arealist li:hover { background: var(--bg); }
+.arealist li.on { border-color: var(--accent); background: var(--accent-soft); }
+.arealist .chip { width: 16px; height: 16px; border-radius: 4px; flex: none; border: 1px solid rgba(128, 128, 128, 0.5); }
+.arealist .chip.plus { display: grid; place-items: center; border-style: dashed; color: var(--muted); line-height: 1; }
+.arealist select { height: 24px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); font-size: 12px; max-width: 104px; }
+.arealist .btn.ghost { width: 22px; height: 22px; padding: 0; color: var(--muted); }
+.arealist li.new { color: var(--muted); }

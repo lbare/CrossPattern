@@ -28,8 +28,10 @@ export interface ConvertOptions {
   saturation?: number;
   /** 0-100: brightens dark parts of the photo and brings their color back, leaving light parts alone. */
   lift?: number;
-  /** Flat tones each cartoon area is reduced to (2-6). */
+  /** Flat tones an area is reduced to when it has no setting of its own (1-6). */
   tones?: number;
+  /** Detail per area id: 1-6 flat tones, or 0 to keep every detail. */
+  areaTones?: Record<number, number>;
   /** Draw a dark one-stitch outline around each cartoon area. */
   outline?: boolean;
   /** Brighten cartoon areas that sit in shadow, so they look drawn rather than photographed. */
@@ -128,28 +130,6 @@ export function sampleImage(img: HTMLImageElement, crop: Crop, w: number, h: num
   return s;
 }
 
-/** Gives every stitch of a solid area the area's average color. */
-function flattenAreas(s: Sampled): Sampled {
-  const sums = new Float64Array(256 * 4);
-  let any = false;
-  const isFlat = (l: number) => l >= FLAT0 && l < CARTOON0;
-  for (let i = 0; i < s.label.length; i++) {
-    const l = s.label[i];
-    if (!isFlat(l) || !s.mask[i]) continue;
-    any = true;
-    sums[l * 4] += s.L[i]; sums[l * 4 + 1] += s.A[i]; sums[l * 4 + 2] += s.B[i]; sums[l * 4 + 3]++;
-  }
-  if (!any) return s;
-  const L = s.L.slice(), A = s.A.slice(), B = s.B.slice();
-  for (let i = 0; i < s.label.length; i++) {
-    const l = s.label[i];
-    if (!isFlat(l) || !s.mask[i]) continue;
-    const c = sums[l * 4 + 3];
-    L[i] = sums[l * 4] / c; A[i] = sums[l * 4 + 1] / c; B[i] = sums[l * 4 + 2] / c;
-  }
-  return { ...s, L, A, B };
-}
-
 /**
  * Gives cartoon areas their drawn look: stronger color, and (with `brighten`) each area that sits in
  * shadow is lifted toward an even, mid-bright level so an orange cat in the shade comes out orange.
@@ -157,7 +137,7 @@ function flattenAreas(s: Sampled): Sampled {
 function cartoonLight(s: Sampled, brighten: boolean): Sampled {
   const byArea = new Map<number, number[]>();
   for (let i = 0; i < s.label.length; i++) {
-    if (s.label[i] >= CARTOON0 && s.mask[i]) (byArea.get(s.label[i]) ?? byArea.set(s.label[i], []).get(s.label[i])!).push(i);
+    if (s.label[i] >= FLAT0 && s.mask[i]) (byArea.get(s.label[i]) ?? byArea.set(s.label[i], []).get(s.label[i])!).push(i);
   }
   if (!byArea.size) return s;
   const L = s.L.slice(), A = s.A.slice(), B = s.B.slice();
@@ -193,7 +173,7 @@ function smooth(s: Sampled, passes: number, cartoon = false): Sampled {
       for (let x = 0; x < w; x++) {
         const i = y * w + x;
         if (!mask[i]) continue;
-        const mine = cartoon ? label[i] >= CARTOON0 : label[i] === NONE;
+        const mine = cartoon ? label[i] >= FLAT0 : label[i] === NONE;
         if (!mine) { nL[i] = L[i]; nA[i] = A[i]; nB[i] = B[i]; continue; }
         let sl = 0, sa = 0, sb = 0, sw = 0;
         for (let dy = -1; dy <= 1; dy++) {
@@ -295,7 +275,12 @@ function kmeans(s: Sampled, idx: number[], k: number, lightWeight: number, weigh
  * Everything else shares the main color budget.
  */
 export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
-  let s = flattenAreas(adjust(src, o));
+  // Each area carries its own level of detail: a number of flat tones, or 0 for "keep every detail",
+  // which is handled like the rest of the picture but protected from simplifying.
+  const tonesOf = (l: number) => o.areaTones?.[l] ?? (l < CARTOON0 ? 1 : o.tones ?? 3);
+  const relabel = src.label.slice();
+  for (let i = 0; i < relabel.length; i++) if (relabel[i] >= FLAT0 && tonesOf(relabel[i]) === 0) relabel[i] = DETAIL;
+  let s = adjust({ ...src, label: relabel }, o);
   s = cartoonLight(s, o.evenLight !== false);
   if (o.smooth > 0) s = smooth(s, o.smooth * 2);
   s = smooth(s, 5, true);
@@ -311,7 +296,7 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
   const areas = new Map<number, number[]>();
   for (let i = 0; i < n; i++) {
     if (!mask[i]) continue;
-    if (label[i] >= CARTOON0) (areas.get(label[i]) ?? areas.set(label[i], []).get(label[i])!).push(i);
+    if (label[i] >= FLAT0) (areas.get(label[i]) ?? areas.set(label[i], []).get(label[i])!).push(i);
     else rest.push(i);
   }
   if (!rest.length && !areas.size) return { width: w, height: h, cells, palette: [] };
@@ -323,8 +308,8 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
     for (const i of rest) cells[i] = ids[c.nearest(i)];
   }
 
-  for (const idx of areas.values()) {
-    const c = kmeans(s, idx, Math.max(2, Math.min(6, o.tones ?? 3)), 0.6, () => 1);
+  for (const [area, idx] of areas) {
+    const c = kmeans(s, idx, Math.max(1, Math.min(6, tonesOf(area))), 0.6, () => 1);
     const ids = Array.from(c.L, (_, k) => add(c, k));
     for (const i of idx) cells[i] = ids[c.nearest(i)];
   }
@@ -353,7 +338,7 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
   };
   if (o.clean > 0) tidy(o.clean, (l) => l === NONE, false);
   // Cartoon areas are always tidied: drawn shapes have no speckle.
-  if (areas.size) tidy(2, (l) => l >= CARTOON0, true);
+  if (areas.size) tidy(2, (l) => l >= FLAT0, true);
 
   if (o.outline && areas.size) {
     // One shared dark line color, drawn on the outermost stitches of each cartoon area wherever it

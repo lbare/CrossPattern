@@ -72,6 +72,15 @@ export function nextFlatId(m: LabelMap): number {
   return CARTOON0 - 1;
 }
 
+/** Every area id in use, in order. */
+export function areaIds(m: LabelMap): number[] {
+  const used = new Uint8Array(256);
+  for (let i = 0; i < m.data.length; i++) used[m.data[i]] = 1;
+  const out: number[] = [];
+  for (let id = FLAT0; id < 256; id++) if (used[id]) out.push(id);
+  return out;
+}
+
 export function nextCartoonId(m: LabelMap): number {
   const used = new Uint8Array(256);
   for (let i = 0; i < m.data.length; i++) used[m.data[i]] = 1;
@@ -143,15 +152,20 @@ export function fillUnmarked(m: LabelMap, label: number): void {
   for (let i = 0; i < m.data.length; i++) if (m.data[i] === NONE) m.data[i] = label;
 }
 
-/** Draws the photo with its marks: removed areas as a checkerboard, solid areas in their final color, detail and cartoon areas tinted. */
-export function compose(base: Base, m: LabelMap, out: ImageData): void {
+/** The tint used to show one area, as [r, g, b]. Each area id gets its own hue. */
+export function areaTint(label: number): [number, number, number] {
+  const hue = ((label - FLAT0) * 137.5 + 300) % 360;
+  const f = (n: number) => { const t = (n + hue / 30) % 12; return 255 * (0.6 - 0.4 * Math.max(-1, Math.min(t - 3, 9 - t, 1))); };
+  return [f(0), f(8), f(4)];
+}
+
+/**
+ * Draws the photo with its marks: removed parts as a checkerboard and each area in its own tint.
+ * With `shapes`, the outlines of the detected shapes are drawn faintly and the one under the cursor is lit up.
+ */
+export function compose(base: Base, m: LabelMap, out: ImageData, shapes?: Shapes | null, hover = -1): void {
   const src = base.image.data, dst = out.data, n = m.w * m.h;
-  const sums = new Float64Array(256 * 4);
-  for (let i = 0; i < n; i++) {
-    const l = m.data[i];
-    if (l < FLAT0 || l >= CARTOON0) continue;
-    sums[l * 4] += src[i * 4]; sums[l * 4 + 1] += src[i * 4 + 1]; sums[l * 4 + 2] += src[i * 4 + 2]; sums[l * 4 + 3]++;
-  }
+  const tints = new Map<number, [number, number, number]>();
   for (let i = 0; i < n; i++) {
     const l = m.data[i], o = i * 4;
     let r = src[o], g = src[o + 1], b = src[o + 2];
@@ -159,16 +173,14 @@ export function compose(base: Base, m: LabelMap, out: ImageData): void {
       const x = i % m.w, y = (i / m.w) | 0;
       const v = ((x >> 3) + (y >> 3)) & 1 ? 236 : 204;
       r = r * 0.12 + v * 0.88; g = g * 0.12 + v * 0.88; b = b * 0.12 + v * 0.88;
-    } else if (l === DETAIL) {
-      r = r * 0.84 + 30 * 0.16; g = g * 0.84 + 210 * 0.16; b = b * 0.84 + 130 * 0.16;
-    } else if (l >= CARTOON0) {
-      // Each cartoon area gets its own tint so neighbouring areas can be told apart.
-      const hue = ((l - CARTOON0) * 137.5 + 300) % 360, k = 0.2;
-      const f = (n: number) => { const t = (n + hue / 30) % 12; return 255 * (0.6 - 0.4 * Math.max(-1, Math.min(t - 3, 9 - t, 1))); };
-      r = r * (1 - k) + f(0) * k; g = g * (1 - k) + f(8) * k; b = b * (1 - k) + f(4) * k;
-    } else if (l >= FLAT0) {
-      const c = sums[l * 4 + 3];
-      r = sums[l * 4] / c; g = sums[l * 4 + 1] / c; b = sums[l * 4 + 2] / c;
+    } else if (l >= DETAIL) {
+      let t = tints.get(l);
+      if (!t) tints.set(l, (t = areaTint(l)));
+      r = r * 0.82 + t[0] * 0.18; g = g * 0.82 + t[1] * 0.18; b = b * 0.82 + t[2] * 0.18;
+    }
+    if (shapes) {
+      if (shapes.id[i] === hover) { r = r * 0.6 + 102; g = g * 0.6 + 102; b = b * 0.6 + 102; }
+      else if (shapes.edge[i] && l !== REMOVE) { r = r * 0.7 + 76; g = g * 0.7 + 76; b = b * 0.7 + 76; }
     }
     dst[o] = r; dst[o + 1] = g; dst[o + 2] = b; dst[o + 3] = 255;
   }
@@ -267,4 +279,95 @@ export function snapStroke(m: LabelMap, base: Base, path: [number, number][], r:
     for (const i of add) sel[i] = 1;
   }
   for (let i = 0; i < n; i++) if (sel[i]) m.data[i] = label;
+}
+
+// ---- Shape detection ----------------------------------------------------
+
+/** The photo split into its obvious shapes: a shape number per pixel, and which pixels lie on a boundary. */
+export interface Shapes { id: Int32Array; edge: Uint8Array }
+
+/**
+ * Splits the photo into shapes by joining neighbouring pixels whose colors are close, weakest
+ * differences first, and refusing to join across a difference that is large compared with what is
+ * already inside each shape (Felzenszwalb and Huttenlocher's method). `size` (1-10) sets how coarse
+ * the shapes are.
+ */
+export function findShapes(base: Base, w: number, h: number, size: number): Shapes {
+  const s = softened(base, w, h), n = w * h;
+  const k = 0.1 * Math.pow(1.5, size), minSize = Math.round(12 + size * size * 3);
+  // Every pair of side-by-side pixels, with how different they are.
+  const m = (w - 1) * h + w * (h - 1);
+  const ea = new Int32Array(m), eb = new Int32Array(m), ew = new Float32Array(m);
+  let e = 0;
+  const diff = (i: number, j: number) => Math.sqrt((s.L[i] - s.L[j]) ** 2 + (s.A[i] - s.A[j]) ** 2 + (s.B[i] - s.B[j]) ** 2);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (x < w - 1) { ea[e] = i; eb[e] = i + 1; ew[e++] = diff(i, i + 1); }
+    if (y < h - 1) { ea[e] = i; eb[e] = i + w; ew[e++] = diff(i, i + w); }
+  }
+  // Order the pairs from most alike to least (a counting sort; differences are small numbers).
+  const BUCKETS = 4096, bucket = (v: number) => Math.min(BUCKETS - 1, Math.floor(v * BUCKETS * 2));
+  const start = new Int32Array(BUCKETS + 1);
+  for (let i = 0; i < m; i++) start[bucket(ew[i]) + 1]++;
+  for (let i = 0; i < BUCKETS; i++) start[i + 1] += start[i];
+  const order = new Int32Array(m), fillAt = start.slice(0, BUCKETS);
+  for (let i = 0; i < m; i++) order[fillAt[bucket(ew[i])]++] = i;
+
+  const parent = new Int32Array(n), count = new Int32Array(n).fill(1), inner = new Float32Array(n);
+  for (let i = 0; i < n; i++) parent[i] = i;
+  const find = (i: number) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const join = (a: number, b: number, wt: number) => {
+    if (count[a] < count[b]) [a, b] = [b, a];
+    parent[b] = a; count[a] += count[b]; inner[a] = Math.max(inner[a], inner[b], wt);
+  };
+  for (let o = 0; o < m; o++) {
+    const i = order[o], a = find(ea[i]), b = find(eb[i]);
+    if (a !== b && ew[i] <= Math.min(inner[a] + k / count[a], inner[b] + k / count[b])) join(a, b, ew[i]);
+  }
+  // Specks too small to be worth picking on their own join whatever they are most like.
+  for (let o = 0; o < m; o++) {
+    const i = order[o], a = find(ea[i]), b = find(eb[i]);
+    if (a !== b && (count[a] < minSize || count[b] < minSize)) join(a, b, ew[i]);
+  }
+  const id = new Int32Array(n), edge = new Uint8Array(n);
+  for (let i = 0; i < n; i++) id[i] = find(i);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if ((x < w - 1 && id[i] !== id[i + 1]) || (y < h - 1 && id[i] !== id[i + w])) edge[i] = 1;
+  }
+  return { id, edge };
+}
+
+/**
+ * Marks the whole shape under a point, then closes any small unmarked specks left completely
+ * surrounded by that mark, so a textured surface becomes one solid area instead of one full of holes.
+ */
+export function fillShape(m: LabelMap, shapes: Shapes, x: number, y: number, label: number): void {
+  const ix = Math.min(m.w - 1, Math.max(0, Math.floor(x))), iy = Math.min(m.h - 1, Math.max(0, Math.floor(y)));
+  const target = shapes.id[iy * m.w + ix];
+  for (let i = 0; i < m.data.length; i++) if (shapes.id[i] === target) m.data[i] = label;
+  if (label !== NONE) fillHoles(m, label, Math.round(m.w * m.h * 0.004));
+}
+
+/** Gives `label` to every patch of unmarked pixels that is smaller than `maxSize` and touches nothing but `label`. */
+export function fillHoles(m: LabelMap, label: number, maxSize: number): void {
+  const { w, h, data } = m, n = w * h, seen = new Uint8Array(n);
+  const patch: number[] = [];
+  for (let start = 0; start < n; start++) {
+    if (seen[start] || data[start] !== NONE) continue;
+    patch.length = 0;
+    patch.push(start);
+    seen[start] = 1;
+    let enclosed = true;
+    for (let p = 0; p < patch.length; p++) {
+      const i = patch[p], x = i % w, y = (i / w) | 0;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) enclosed = false;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+        if (j < 0 || j >= n) continue;
+        if (data[j] === NONE) { if (!seen[j]) { seen[j] = 1; patch.push(j); } }
+        else if (data[j] !== label) enclosed = false;
+      }
+    }
+    if (enclosed && patch.length <= maxSize) for (const i of patch) data[i] = label;
+  }
 }
