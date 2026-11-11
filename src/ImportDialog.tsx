@@ -5,7 +5,7 @@ import { Modal } from './dialogs';
 import { ConversionRecord, DRAFT, deleteConversion, getConversion, putConversion } from './db';
 import {
   Base, CARTOON0, Crop, DETAIL, FLAT0, LabelMap, NONE, REMOVE, compose, fillPolygon, fillUnmarked, makeBase,
-  makeLabels, nextCartoonId, nextFlatId, remapLabels, stamp, stampLine, wand,
+  makeLabels, nextCartoonId, nextFlatId, remapLabels, snapStroke, stamp, stampLine, wand,
 } from './marks';
 import { MAX_SIZE, paletteFromHexes } from './model';
 import { FABRIC } from './render';
@@ -132,7 +132,7 @@ const MODE_HELP: Record<Mode, string> = {
 interface View { z: number; x: number; y: number }
 
 function MarkCanvas(props: {
-  base: Base; labels: LabelMap; mode: Mode; tool: MarkTool; brush: number; tol: number; version: number;
+  base: Base; labels: LabelMap; mode: Mode; tool: MarkTool; brush: number; tol: number; snap: boolean; version: number;
   onBefore: () => void; onChange: () => void;
 }) {
   const { base, labels, mode, tool, brush } = props;
@@ -142,6 +142,8 @@ function MarkCanvas(props: {
   const st = useRef({
     drawing: false, label: 0, lx: 0, ly: 0, pts: [] as [number, number][], hover: null as [number, number] | null,
     out: null as ImageData | null, pan: null as { sx: number; sy: number; x: number; y: number } | null,
+    // For a snapping stroke: where the brush has been, and the marks as they were before it began.
+    path: [] as [number, number][], before: null as Uint8Array | null,
   });
 
   /** Keeps the picture covering the box: no zooming out past 1 and no dragging it off the edge. */
@@ -230,7 +232,11 @@ function MarkCanvas(props: {
     }
     s.drawing = true;
     s.lx = x; s.ly = y;
-    if (tool === 'brush') stamp(labels, x, y, brush, s.label);
+    if (tool === 'brush' && props.snap) {
+      s.before = labels.data.slice();
+      s.path = [[x, y]];
+      snapStroke(labels, base, s.path, brush, props.tol * 0.003, s.label);
+    } else if (tool === 'brush') stamp(labels, x, y, brush, s.label);
     else s.pts = [[x, y]];
     paint();
   };
@@ -244,7 +250,13 @@ function MarkCanvas(props: {
     const [x, y] = at(e);
     s.hover = [x, y];
     if (s.drawing) {
-      if (tool === 'brush') stampLine(labels, s.lx, s.ly, x, y, brush, s.label);
+      if (tool === 'brush' && s.before) {
+        // Redo the whole stroke from the saved marks each time, so the snapped edge follows the brush live.
+        if (Math.hypot(x - s.lx, y - s.ly) < Math.max(1, brush / 4)) return paint();
+        s.path.push([x, y]);
+        labels.data.set(s.before);
+        snapStroke(labels, base, s.path, brush, props.tol * 0.003, s.label);
+      } else if (tool === 'brush') stampLine(labels, s.lx, s.ly, x, y, brush, s.label);
       else s.pts.push([x, y]);
       s.lx = x; s.ly = y;
     }
@@ -257,6 +269,8 @@ function MarkCanvas(props: {
     if (tool === 'lasso' && s.pts.length > 2) fillPolygon(labels, s.pts, s.label);
     s.drawing = false;
     s.pts = [];
+    s.path = [];
+    s.before = null;
     props.onChange();
     paint();
   };
@@ -319,6 +333,7 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   const [tool, setTool] = useState<MarkTool>('brush');
   const [brush, setBrush] = useState(16);
   const [tol, setTol] = useState(30);
+  const [snap, setSnap] = useState(true);
   const blob = useRef<Blob | null>(null);
   const marks = useRef<{ labels: LabelMap; crop: Crop } | null>(null);
   const history = useRef<Uint8Array[]>([]);
@@ -617,6 +632,15 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
                 <p className="hint mode-help">{MODE_HELP[mode]}</p>
                 <Segmented value={tool} set={setTool} options={[['brush', 'Brush'], ['lasso', 'Lasso'], ['wand', 'Magic wand']]} />
                 {tool === 'brush' && <Slider label="Brush size" value={brush} min={2} max={60} set={setBrush} />}
+                {tool === 'brush' && (
+                  <label className="check" title="The mark spreads to the edges of what you paint on, and pulls back from what you overshoot">
+                    <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> Snap to edges
+                  </label>
+                )}
+                {tool === 'brush' && snap && (
+                  <Slider label="Edge sensitivity" value={tol} min={2} max={100} set={setTol}
+                    hint="Paint along the middle of an area. Lower stops at fainter edges; higher spreads further." />
+                )}
                 {tool === 'lasso' && <p className="hint">Draw around an area; everything inside is marked.</p>}
                 {tool === 'wand' && (
                   <Slider label="Tolerance" value={tol} min={2} max={100} set={setTol}
@@ -670,7 +694,7 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
             <figure>
               <div className="fit" style={fitStyle(labels.w / labels.h, 56)}>
                 <MarkCanvas
-                  base={base} labels={labels} mode={mode} tool={tool} brush={brush} tol={tol} version={version}
+                  base={base} labels={labels} mode={mode} tool={tool} brush={brush} tol={tol} snap={snap} version={version}
                   onBefore={pushHistory} onChange={bump}
                 />
               </div>

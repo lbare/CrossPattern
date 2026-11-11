@@ -67,6 +67,8 @@ Press **Convert picture** and choose, drop or paste an image.
    - **Keep detail** protects the area from simplifying and gives it priority when colors are chosen.
 
    Marks can be made with a brush, a lasso, or a magic wand that grabs a connected area of similar color.
+   The brush snaps to edges by default: paint roughly along the middle of something and the mark spreads to
+   its edges and pulls back from what you overshoot. Untick "Snap to edges" for plain freehand painting.
    "Remove everything unmarked" cuts out a background in one click once the subject is marked.
 
    Then set the number of colors, how strongly to flatten unmarked areas, and how much to clear stray stitches.

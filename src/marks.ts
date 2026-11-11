@@ -173,3 +173,98 @@ export function compose(base: Base, m: LabelMap, out: ImageData): void {
     dst[o] = r; dst[o + 1] = g; dst[o + 2] = b; dst[o + 3] = 255;
   }
 }
+
+// ---- Edge snapping ------------------------------------------------------
+
+const softCache = new WeakMap<Base, { L: Float32Array; A: Float32Array; B: Float32Array }>();
+
+/** A slightly blurred copy of the photo's colors, so texture (carpet, fur) doesn't read as edges. */
+function softened(base: Base, w: number, h: number) {
+  let s = softCache.get(base);
+  if (s) return s;
+  const blur = (src: Float32Array) => {
+    const tmp = new Float32Array(src.length), out = new Float32Array(src.length), R = 2;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let sum = 0, n = 0;
+      for (let d = -R; d <= R; d++) { const xx = x + d; if (xx >= 0 && xx < w) { sum += src[y * w + xx]; n++; } }
+      tmp[y * w + x] = sum / n;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let sum = 0, n = 0;
+      for (let d = -R; d <= R; d++) { const yy = y + d; if (yy >= 0 && yy < h) { sum += tmp[yy * w + x]; n++; } }
+      out[y * w + x] = sum / n;
+    }
+    return out;
+  };
+  s = { L: blur(base.L), A: blur(base.A), B: blur(base.B) };
+  softCache.set(base, s);
+  return s;
+}
+
+/**
+ * A brush stroke that snaps to the edges of what it is painted on. The middle of the stroke says which
+ * colors are wanted; the mark then spreads outward through similar colors until it meets an edge (up to
+ * about a brush-width beyond the stroke), and pulls back from anything the brush overshot onto.
+ */
+export function snapStroke(m: LabelMap, base: Base, path: [number, number][], r: number, tol: number, label: number): void {
+  const { w, h } = m, n = w * h;
+  const soft = softened(base, w, h);
+  const mask = (radius: number) => {
+    const t: LabelMap = { w, h, data: new Uint8Array(n) };
+    stamp(t, path[0][0], path[0][1], radius, 1);
+    for (let i = 1; i < path.length; i++) stampLine(t, path[i - 1][0], path[i - 1][1], path[i][0], path[i][1], radius, 1);
+    return t.data;
+  };
+  const core = mask(Math.max(1.5, r * 0.45)), reach = mask(r * 2 + 2);
+
+  // The few colors that make up what is under the middle of the stroke.
+  const samples: number[] = [];
+  for (let i = 0; i < n; i++) if (core[i]) samples.push(i);
+  if (!samples.length) return;
+  const step = Math.max(1, Math.floor(samples.length / 1500));
+  const pts = samples.filter((_, k) => k % step === 0);
+  const K = Math.min(4, pts.length);
+  const cL = new Float64Array(K), cA = new Float64Array(K), cB = new Float64Array(K);
+  const d2 = (i: number, c: number) => (soft.L[i] - cL[c]) ** 2 + (soft.A[i] - cA[c]) ** 2 + (soft.B[i] - cB[c]) ** 2;
+  const near = (i: number) => { let b = Infinity; for (let c = 0; c < K; c++) b = Math.min(b, d2(i, c)); return b; };
+  // Start the groups far apart, then settle them.
+  let pick = pts[0];
+  for (let c = 0; c < K; c++) {
+    cL[c] = soft.L[pick]; cA[c] = soft.A[pick]; cB[c] = soft.B[pick];
+    let far = -1;
+    for (const i of pts) { let b = Infinity; for (let k = 0; k <= c; k++) b = Math.min(b, d2(i, k)); if (b > far) { far = b; pick = i; } }
+  }
+  for (let iter = 0; iter < 5; iter++) {
+    const sum = new Float64Array(K * 4);
+    for (const i of pts) {
+      let best = 0, bd = Infinity;
+      for (let c = 0; c < K; c++) { const d = d2(i, c); if (d < bd) { bd = d; best = c; } }
+      sum[best * 4] += soft.L[i]; sum[best * 4 + 1] += soft.A[i]; sum[best * 4 + 2] += soft.B[i]; sum[best * 4 + 3]++;
+    }
+    for (let c = 0; c < K; c++) if (sum[c * 4 + 3]) { cL[c] = sum[c * 4] / sum[c * 4 + 3]; cA[c] = sum[c * 4 + 1] / sum[c * 4 + 3]; cB[c] = sum[c * 4 + 2] / sum[c * 4 + 3]; }
+  }
+
+  // Spread from the middle of the stroke through similar colors, staying within reach of the brush.
+  const t2 = tol * tol, sel = new Uint8Array(n), stack: number[] = [];
+  for (const i of samples) { sel[i] = 1; stack.push(i); }
+  while (stack.length) {
+    const i = stack.pop()!, x = i % w;
+    const visit = (j: number) => { if (!sel[j] && reach[j] && near(j) <= t2) { sel[j] = 1; stack.push(j); } };
+    if (x > 0) visit(i - 1);
+    if (x < w - 1) visit(i + 1);
+    if (i >= w) visit(i - w);
+    if (i < n - w) visit(i + w);
+  }
+  // Fill pinholes left by odd-colored specks, so the mark is solid.
+  for (let pass = 0; pass < 2; pass++) {
+    const add: number[] = [];
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (sel[i] || !reach[i]) continue;
+      const c = sel[i - 1] + sel[i + 1] + sel[i - w] + sel[i + w] + sel[i - w - 1] + sel[i - w + 1] + sel[i + w - 1] + sel[i + w + 1];
+      if (c >= 5) add.push(i);
+    }
+    for (const i of add) sel[i] = 1;
+  }
+  for (let i = 0; i < n; i++) if (sel[i]) m.data[i] = label;
+}
