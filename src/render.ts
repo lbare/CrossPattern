@@ -6,26 +6,27 @@ export const FABRIC = '#faf7f0';
 export interface Range { x0: number; y0: number; x1: number; y1: number }
 
 /** Paints the pattern at one pixel per square. Scaling this up is much faster than drawing every square. */
-export function buildCellImage(p: Pattern, highlight: number, target?: HTMLCanvasElement): HTMLCanvasElement {
+export function buildCellImage(p: Pattern, highlight: number, target?: HTMLCanvasElement, fadeDone = false): HTMLCanvasElement {
   const c = target ?? document.createElement('canvas');
   c.width = p.width;
   c.height = p.height;
   const ctx = c.getContext('2d')!;
   const img = ctx.createImageData(p.width, p.height);
   const out = new Uint32Array(img.data.buffer);
-  const lut = new Map<number, number>();
+  const lut = new Map<number, number>(), faded = new Map<number, number>();
+  const [fr, fg, fb] = hexToRgb(p.fabric ?? FABRIC);
+  const pack = (r: number, g: number, b: number) => (0xff000000 | (Math.round(b) << 16) | (Math.round(g) << 8) | Math.round(r)) >>> 0;
+  const toward = (r: number, g: number, b: number, k: number) => pack(r * (1 - k) + fr * k, g * (1 - k) + fg * k, b * (1 - k) + fb * k);
   for (const col of p.palette) {
-    let [r, g, b] = hexToRgb(col.hex);
-    if (highlight && col.id !== highlight) {
-      r = Math.round(r * 0.15 + 250 * 0.85);
-      g = Math.round(g * 0.15 + 247 * 0.85);
-      b = Math.round(b * 0.15 + 240 * 0.85);
-    }
-    lut.set(col.id, (0xff000000 | (b << 16) | (g << 8) | r) >>> 0);
+    const [r, g, b] = hexToRgb(col.hex);
+    lut.set(col.id, highlight && col.id !== highlight ? toward(r, g, b, 0.85) : pack(r, g, b));
+    // Stitched squares fade into the fabric so what is left to do stands out.
+    faded.set(col.id, toward(r, g, b, 0.78));
   }
+  const done = fadeDone ? p.done : undefined;
   for (let i = 0; i < out.length; i++) {
     const v = p.cells[i];
-    out[i] = v ? lut.get(v) ?? 0 : 0;
+    out[i] = v ? (done?.[i] ? faded : lut).get(v) ?? 0 : 0;
   }
   ctx.putImageData(img, 0, 0);
   return c;
@@ -37,6 +38,10 @@ export interface OverlayOptions {
   rulers: boolean;
   ink: string;
   highlight?: number;
+  /** Where ruler numbers are drawn: along the top and left of this range (default: the whole pattern). */
+  rulerRange?: Range;
+  /** Squares whose symbols are drawn faintly (stitch mode). */
+  dimDone?: boolean;
 }
 
 /** Draws symbols, grid lines, ruler numbers and backstitches. Expects the context origin at the pattern's top-left. */
@@ -54,7 +59,7 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, p: Pattern, scale: nu
         if (!v) continue;
         const c = info.get(v);
         if (!c) continue;
-        ctx.fillStyle = o.highlight && v !== o.highlight ? '#b8b4ac' : c.ink;
+        ctx.fillStyle = (o.highlight && v !== o.highlight) || (o.dimDone && p.done?.[y * p.width + x]) ? '#b8b4ac' : c.ink;
         ctx.fillText(c.symbol, (x + 0.5) * scale, (y + 0.54) * scale);
       }
     }
@@ -77,8 +82,10 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, p: Pattern, scale: nu
       }
       ctx.stroke();
     };
-    if (scale >= 6) lines(1, 'rgba(0,0,0,0.16)', 1);
-    lines(10, 'rgba(0,0,0,0.55)', 1);
+    // Grid lines flip to white on dark fabric so they stay visible.
+    const line = inkFor(p.fabric ?? FABRIC) === '#000000' ? '0,0,0' : '255,255,255';
+    if (scale >= 6) lines(1, `rgba(${line},0.16)`, 1);
+    lines(10, `rgba(${line},0.55)`, 1);
   }
   ctx.strokeStyle = 'rgba(0,0,0,0.7)';
   ctx.lineWidth = 1;
@@ -89,10 +96,11 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, p: Pattern, scale: nu
     ctx.font = '10px "Helvetica Neue", Arial, sans-serif';
     ctx.textBaseline = 'bottom';
     ctx.textAlign = 'center';
-    for (let x = 10; x <= p.width; x += 10) ctx.fillText(String(x), x * scale, -4);
+    const rr = o.rulerRange ?? { x0: 0, y0: 0, x1: p.width, y1: p.height };
+    for (let x = Math.ceil((rr.x0 + 1) / 10) * 10; x <= rr.x1; x += 10) ctx.fillText(String(x), x * scale, rr.y0 * scale - 4);
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
-    for (let y = 10; y <= p.height; y += 10) ctx.fillText(String(y), -5, y * scale);
+    for (let y = Math.ceil((rr.y0 + 1) / 10) * 10; y <= rr.y1; y += 10) ctx.fillText(String(y), rr.x0 * scale - 5, y * scale);
   }
 
   if (p.backstitches.length) {
@@ -144,7 +152,7 @@ export function renderExport(p: Pattern, o: ExportOptions): HTMLCanvasElement {
 
   ctx.save();
   ctx.translate(margin, titleH + margin);
-  ctx.fillStyle = FABRIC;
+  ctx.fillStyle = p.fabric ?? FABRIC;
   ctx.fillRect(0, 0, W, H);
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(buildCellImage(p, 0), 0, 0, W, H);
@@ -197,5 +205,33 @@ export function convertedImage(cv: Converted): HTMLCanvasElement {
   }
   ctx.putImageData(img, 0, 0);
   convertedCache.set(cv, c);
+  return c;
+}
+
+/** One page of a printed chart: a block of the pattern with symbols, grid and its own row and column numbers. */
+export function renderPage(p: Pattern, r: Range, cell: number): HTMLCanvasElement {
+  const margin = 30, w = (r.x1 - r.x0) * cell, h = (r.y1 - r.y0) * cell;
+  const c = document.createElement('canvas');
+  c.width = w + margin + 2;
+  c.height = h + margin + 2;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.translate(margin - r.x0 * cell, margin - r.y0 * cell);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(r.x0 * cell, r.y0 * cell, w + 1, h + 1);
+  ctx.clip();
+  ctx.fillStyle = p.fabric ?? FABRIC;
+  ctx.fillRect(r.x0 * cell, r.y0 * cell, w, h);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(buildCellImage(p, 0), r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, r.x0 * cell, r.y0 * cell, w, h);
+  drawOverlay(ctx, p, cell, r, { grid: true, symbols: true, rulers: false, ink: '#333' });
+  ctx.restore();
+  // Row and column numbers for just this block, drawn outside the clipped area.
+  drawOverlay(ctx, { ...p, backstitches: [] }, cell, { x0: 0, y0: 0, x1: 0, y1: 0 }, { grid: false, symbols: false, rulers: true, ink: '#333', rulerRange: r });
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(r.x0 * cell + 0.5, r.y0 * cell + 0.5, w, h);
   return c;
 }

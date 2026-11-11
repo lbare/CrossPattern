@@ -283,3 +283,77 @@ main { display: grid; grid-template-columns: 48px 1fr 264px; min-height: 0; }
 .shortcuts dl div { display: flex; gap: 10px; align-items: baseline; }
 .shortcuts dt { flex: none; min-width: 120px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 .shortcuts dd { margin: 0; color: var(--muted); }
+
+/* ---- Photo adjustments ---- */
+.adjust { display: grid; gap: 10px; }
+.adjust summary { cursor: pointer; color: var(--text); font-size: 13px; }
+.adjust[open] summary { margin-bottom: 10px; }
+.adjust > label, .adjust > button { margin-bottom: 10px; }
+
+/* ---- Printing: only the prepared chart pages are printed ---- */
+#print-root { display: none; }
+@media print {
+  @page { margin: 12mm; }
+  html, body { height: auto; overflow: visible; background: #fff; }
+  #root { display: none !important; }
+  #print-root { display: block; color: #000; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 11pt; }
+  .print-page { break-after: page; }
+  .print-page:last-child { break-after: auto; }
+  .print-page h1 { font-size: 20pt; margin: 0 0 6pt; }
+  .print-page p { margin: 0 0 6pt; }
+  .print-small { font-size: 9pt; color: #333; }
+  .print-page canvas { display: block; max-width: 100%; max-height: 245mm; }
+  .print-page canvas.print-preview { max-height: 110mm; margin: 8pt 0 12pt; border: 0.5pt solid #999; }
+  .print-key { border-collapse: collapse; font-size: 10pt; }
+  .print-key th { text-align: left; font-weight: 600; padding: 2pt 14pt 4pt 0; border-bottom: 0.5pt solid #999; }
+  .print-key td { padding: 3pt 14pt 3pt 0; }
+  .print-chip {
+    display: inline-block; width: 16pt; height: 16pt; line-height: 16pt; text-align: center; border: 0.5pt solid #555;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .print-page canvas { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* ---- Progress, fabric, guide ---- */
+.totals { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.totals label { display: flex; align-items: center; gap: 6px; }
+.totals input[type='color'] { width: 30px; height: 22px; padding: 1px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); cursor: pointer; }
+.progress { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.progress .bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+.progress .bar span { display: block; height: 100%; background: var(--accent); }
+
+.guide { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 20px; padding: 8px 18px 0; height: min(62vh, 620px); }
+.guide nav { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.guide nav button { text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+.guide nav button:hover { background: var(--bg); }
+.guide nav button.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.guide article { overflow-y: auto; padding-right: 8px; }
+.guide article > h3 { font-size: 18px; margin: 4px 0 10px; }
+.guide .lead { color: var(--muted); margin-bottom: 14px; max-width: 70ch; line-height: 1.5; }
+.guide article > dl { margin: 0; display: grid; gap: 14px; max-width: 74ch; }
+.guide article > dl dt { font-weight: 600; margin-bottom: 2px; }
+.guide article > dl dd { margin: 0; color: var(--muted); line-height: 1.5; }
+.guide .shortcuts { padding: 0; }
+.guide .shortcuts h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 10px 0 6px; }
+
+/* ---- Narrow screens: one-row top bar, color panel as a drawer ---- */
+.narrow-only { display: none; }
+@media (max-width: 760px) {
+  .narrow-only { display: inline-flex; }
+  .topbar { flex-wrap: nowrap; overflow-x: auto; gap: 8px; padding: 6px 8px; scrollbar-width: none; }
+  .topbar > * { flex: none; }
+  .name { width: 130px; }
+  main { grid-template-columns: 44px 1fr; position: relative; }
+  .panel { display: none; }
+  .show-panel .panel {
+    display: flex; position: absolute; top: 0; right: 0; bottom: 0; width: min(280px, 86vw); z-index: 5;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.3);
+  }
+  .status .muted { display: none; }
+  .selbar { top: 6px; }
+  .guide { grid-template-columns: 1fr; height: 70vh; }
+  .guide nav { flex-direction: row; overflow-x: auto; flex: none; }
+  .guide nav button { white-space: nowrap; }
+  .areas { grid-template-columns: 1fr; }
+  .areas figure:last-of-type { grid-column: auto; }
+}

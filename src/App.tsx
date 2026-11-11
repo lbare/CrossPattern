@@ -3,7 +3,8 @@ import { CanvasView } from './CanvasView';
 import { ImportDialog } from './ImportDialog';
 import { PalettePanel } from './PalettePanel';
 import { ExportDialog, NewDialog, ResizeDialog } from './dialogs';
-import { HelpDialog, ProjectsDialog, ReconvertDialog } from './extras';
+import { ProjectsDialog, ReconvertDialog } from './extras';
+import { GuideDialog } from './guide';
 import {
   S, Tool, commitFloating, copySelection, cutSelection, deleteSelection, emit, fitView, keys, nudgeSelection,
   openDialog, openFile, paste, redo, renamePattern, saveFile, selectAll, setTool, undo, useStore, zoomBy,
@@ -19,6 +20,7 @@ const ICONS: Record<string, string> = {
   restore: 'M4.500 10a5.500 5.500 0 1 0 1.800-4.100M4 3.500v3.500h3.500M10 7v3.200l2.200 1.500',
   line: 'M4 16L16 4',
   rect: 'M4 5h12v10H4z',
+  ellipse: 'M10 4.500c3.600 0 6.500 2.500 6.500 5.500s-2.900 5.500-6.500 5.500S3.500 13 3.500 10 6.400 4.500 10 4.500z',
   select: 'M4 4h3M9 4h3M14 4h2v2M16 8v3M16 13v3h-2M12 16H9M7 16H4v-2M4 12V9M4 7V4',
   backstitch: 'M3 15l4-9 5 6 5-8',
   pan: 'M10 2v16M2 10h16M10 2L8 4M10 2l2 2M10 18l-2-2M10 18l2-2M2 10l2-2M2 10l2 2M18 10l-2-2M18 10l-2 2',
@@ -45,6 +47,7 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: 'picker', label: 'Pick color', key: 'I', hint: 'Click a stitch to use its color.' },
   { id: 'line', label: 'Line', key: 'L', hint: 'Drag to draw a straight line of stitches.' },
   { id: 'rect', label: 'Rectangle', key: 'R', hint: 'Drag to draw a rectangle. Hold Shift to fill it.' },
+  { id: 'ellipse', label: 'Ellipse', key: 'U', hint: 'Drag to draw an ellipse or circle. Hold Shift to fill it.' },
   { id: 'select', label: 'Select', key: 'M', hint: 'Drag to select, drag inside to move. Copy, cut, paste and Delete work. Esc to finish.' },
   { id: 'backstitch', label: 'Backstitch', key: 'K', hint: 'Drag between grid corners to add an outline. Alt-click a line to remove it.' },
   { id: 'pan', label: 'Move view', key: 'H', hint: 'Drag to move around. Space-drag works with any tool.' },
@@ -101,6 +104,13 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKeyUp);
+    // First visit: open the guide once so new people know where to start.
+    try {
+      if (!localStorage.getItem('crosspattern.seenGuide')) {
+        localStorage.setItem('crosspattern.seenGuide', '1');
+        openDialog('help');
+      }
+    } catch { /* storage blocked */ }
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
@@ -112,7 +122,7 @@ export function App() {
 
   return (
     <div
-      className="app"
+      className={'app' + (S.panelOpen ? ' show-panel' : '')}
       onDragOver={(e) => { if (!dialog) e.preventDefault(); }}
       onDrop={async (e) => {
         if (dialog) return;
@@ -151,7 +161,7 @@ export function App() {
         </div>
         <div className="group">
           <button className="btn primary" onClick={() => setDialog('import')}>Convert picture</button>
-          <button className="btn" onClick={() => setDialog('export')}>Export PNG</button>
+          <button className="btn" onClick={() => setDialog('export')}>Export</button>
           <button className="btn" onClick={() => setDialog('resize')} title="Change the canvas size">
             {p.width} × {p.height}
           </button>
@@ -179,9 +189,19 @@ export function App() {
           >
             Mirror
           </button>
+          <button
+            className={'btn' + (S.stitchMode ? ' on' : '')}
+            title="Track your real-life progress: click squares to tick them off as stitched"
+            onClick={() => { commitFloating(); S.selection = null; S.stitchMode = !S.stitchMode; emit(false); }}
+          >
+            Stitch mode
+          </button>
         </div>
         <div className="group">
-          <button className="btn icon" onClick={() => setDialog('help')} title="Keyboard shortcuts (?)">?</button>
+          <button className="btn" onClick={() => setDialog('help')} title="How everything works, and keyboard shortcuts (?)">Guide</button>
+          <button className={'btn narrow-only' + (S.panelOpen ? ' on' : '')} onClick={() => { S.panelOpen = !S.panelOpen; emit(false); }}>
+            Colors
+          </button>
         </div>
       </header>
 
@@ -211,7 +231,11 @@ export function App() {
       </main>
 
       <footer className="status">
-        <span>{error ? <span className="error">{error}</span> : <><b>{tool.label}</b> — {tool.hint}</>}</span>
+        <span>
+          {error ? <span className="error">{error}</span>
+            : S.stitchMode ? <><b>Stitch mode</b> — Click or drag to tick squares off as stitched; click again to untick. Shift-click ticks a whole patch.</>
+            : <><b>{tool.label}</b> — {tool.hint}</>}
+        </span>
         <span className="grow" />
         <span id="status-pos" />
         <span className="muted">Scroll to move · ⌘/Ctrl-scroll or pinch to zoom · saved automatically in this browser</span>
@@ -223,7 +247,7 @@ export function App() {
       )}
       {dialog === 'projects' && <ProjectsDialog onClose={() => setDialog(null)} />}
       {dialog === 'reconvert' && <ReconvertDialog onClose={() => setDialog(null)} />}
-      {dialog === 'help' && <HelpDialog onClose={() => setDialog(null)} />}
+      {dialog === 'help' && <GuideDialog onClose={() => setDialog(null)} />}
       {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === 'resize' && <ResizeDialog onClose={() => setDialog(null)} />}
     </div>

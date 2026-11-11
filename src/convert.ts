@@ -21,6 +21,24 @@ export interface ConvertOptions {
   smooth: number;
   /** 0-3: how aggressively to remove stray single stitches afterwards. */
   clean: number;
+  /** Photo adjustments, each -100 to 100 with 0 meaning unchanged. */
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+}
+
+/** Brightens, adds contrast or boosts color before conversion, so a dull photo doesn't give a dull pattern. */
+function adjust(s: Sampled, o: ConvertOptions): Sampled {
+  const br = (o.brightness ?? 0) / 400, ct = Math.pow(2, (o.contrast ?? 0) / 100);
+  const sat = (o.saturation ?? 0) < 0 ? 1 + (o.saturation ?? 0) / 100 : 1 + (o.saturation ?? 0) / 50;
+  if (!br && ct === 1 && sat === 1) return s;
+  const L = s.L.slice(), A = s.A.slice(), B = s.B.slice();
+  for (let i = 0; i < L.length; i++) {
+    L[i] = Math.min(1, Math.max(0, (L[i] - 0.5) * ct + 0.5 + br));
+    A[i] *= sat;
+    B[i] *= sat;
+  }
+  return { ...s, L, A, B };
 }
 
 export interface ConvertResult {
@@ -158,7 +176,7 @@ function rng(seed: number) {
 
 /** Reduces a sampled picture to a small set of colors (k-means clustering), then tidies stray stitches. */
 export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
-  const flat = flattenAreas(src);
+  const flat = flattenAreas(adjust(src, o));
   const s = o.smooth > 0 ? smooth(flat, o.smooth * 2) : flat;
   const { w, h, L, A, B, mask, label } = s;
   const n = w * h;

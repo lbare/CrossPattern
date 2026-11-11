@@ -3,7 +3,7 @@ import { clamp } from './color';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
-  S, Tool, addColor, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, dropUndo, emit,
+  S, Tool, addColor, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, doneMap, dropUndo, emit,
   fitView, keys, liftSelection, lockedIds, openDialog, pushUndo, refImage, samplePhoto, selectedRect, subscribe, transformSelection,
   useStore, zoomAt,
 } from './store';
@@ -16,9 +16,10 @@ type Drag =
   | { mode: 'paint'; fn: CellFn; size: number; lx: number; ly: number }
   | { mode: 'shape' }
   | { mode: 'move'; sx: number; sy: number; fx: number; fy: number }
-  | { mode: 'select'; x0: number; y0: number; moved: boolean };
+  | { mode: 'select'; x0: number; y0: number; moved: boolean }
+  | { mode: 'done'; value: number; lx: number; ly: number };
 
-interface Preview { kind: 'line' | 'rect' | 'backstitch'; x0: number; y0: number; x1: number; y1: number; filled: boolean }
+interface Preview { kind: 'line' | 'rect' | 'ellipse' | 'backstitch'; x0: number; y0: number; x1: number; y1: number; filled: boolean }
 
 export function CanvasView() {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -99,6 +100,16 @@ export function CanvasView() {
       }
       const xa = Math.min(p.x0, p.x1), xb = Math.max(p.x0, p.x1);
       const ya = Math.min(p.y0, p.y1), yb = Math.max(p.y0, p.y1);
+      if (p.kind === 'ellipse') {
+        // A square belongs to the ellipse when its centre is inside; the outline is the squares on its rim.
+        const rx = (xb - xa + 1) / 2, ry = (yb - ya + 1) / 2, cx = xa + rx, cy = ya + ry;
+        const within = (x: number, y: number) => ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1;
+        for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) {
+          if (!within(x, y) || !inside(x, y)) continue;
+          if (p.filled || !within(x - 1, y) || !within(x + 1, y) || !within(x, y - 1) || !within(x, y + 1)) fn(x, y);
+        }
+        return;
+      }
       for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) {
         if ((p.filled || x === xa || x === xb || y === ya || y === yb) && inside(x, y)) fn(x, y);
       }
@@ -111,11 +122,11 @@ export function CanvasView() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       const pw = p.width * scale, ph = p.height * scale;
-      ctx.fillStyle = FABRIC;
+      ctx.fillStyle = p.fabric ?? FABRIC;
       ctx.fillRect(ox, oy, pw, ph);
 
-      const key = S.cellsVersion + ':' + S.highlight;
-      if (!img || key !== imgKey) { img = buildCellImage(p, S.highlight, img ?? undefined); imgKey = key; }
+      const key = S.cellsVersion + ':' + S.highlight + ':' + S.stitchMode;
+      if (!img || key !== imgKey) { img = buildCellImage(p, S.highlight, img ?? undefined, S.stitchMode); imgKey = key; }
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, ox, oy, pw, ph);
 
@@ -168,7 +179,7 @@ export function CanvasView() {
         x1: clamp(Math.ceil((w - ox) / scale), 0, p.width),
         y1: clamp(Math.ceil((h - oy) / scale), 0, p.height),
       }, {
-        grid: S.showGrid, symbols: S.showSymbols, rulers: true,
+        grid: S.showGrid, symbols: S.showSymbols, rulers: true, dimDone: S.stitchMode,
         ink: getComputedStyle(wrap).color, highlight: S.highlight,
       });
 
@@ -219,7 +230,7 @@ export function CanvasView() {
           ctx.stroke();
         } else if (S.tool !== 'pan' && S.tool !== 'select') {
           const cx = Math.floor(hover.x), cy = Math.floor(hover.y);
-          const b = BRUSH_TOOLS.includes(S.tool) ? sizeFor(S.tool) : 1;
+          const b = !S.stitchMode && BRUSH_TOOLS.includes(S.tool) ? sizeFor(S.tool) : 1;
           const off = Math.floor((b - 1) / 2);
           if (inside(cx, cy)) ctx.strokeRect((cx - off) * scale + 0.5, (cy - off) * scale + 0.5, b * scale, b * scale);
         }
@@ -263,6 +274,29 @@ export function CanvasView() {
         return;
       }
       if (e.button !== 0) return;
+      if (S.stitchMode) {
+        // Stitch mode: tick squares off as stitched (or untick them) instead of editing the pattern.
+        if (!inside(c.x, c.y) || !p.cells[c.y * p.width + c.x]) return;
+        pushUndo();
+        const done = doneMap(), i = c.y * p.width + c.x, value = done[i] ? 0 : 1;
+        if (e.shiftKey) {
+          // Shift ticks off the whole connected patch of this color.
+          const color = p.cells[i], stack = [i], seen = new Uint8Array(done.length);
+          seen[i] = 1;
+          while (stack.length) {
+            const j = stack.pop()!, jx = j % p.width;
+            done[j] = value;
+            for (const n of [jx > 0 ? j - 1 : -1, jx < p.width - 1 ? j + 1 : -1, j - p.width, j + p.width]) {
+              if (n >= 0 && n < done.length && !seen[n] && p.cells[n] === color) { seen[n] = 1; stack.push(n); }
+            }
+          }
+        } else {
+          done[i] = value;
+          drag = { mode: 'done', value, lx: c.x, ly: c.y };
+        }
+        emit();
+        return;
+      }
       let tool = S.tool;
       if (e.altKey && tool !== 'backstitch' && tool !== 'select') tool = 'picker';
 
@@ -310,6 +344,7 @@ export function CanvasView() {
         }
         case 'line':
         case 'rect':
+        case 'ellipse':
           drag = { mode: 'shape' };
           preview = { kind: tool, x0: c.x, y0: c.y, x1: c.x, y1: c.y, filled: e.shiftKey };
           schedule();
@@ -347,6 +382,16 @@ export function CanvasView() {
       if (status) status.textContent = inside(c.x, c.y) ? `${c.x + 1}, ${c.y + 1}` : '';
       if (!drag) return schedule();
       switch (drag.mode) {
+        case 'done': {
+          const done = doneMap();
+          for (const [x, y] of linePoints(drag.lx, drag.ly, c.x, c.y)) {
+            if (inside(x, y) && p.cells[y * p.width + x]) done[y * p.width + x] = drag.value;
+          }
+          drag.lx = c.x;
+          drag.ly = c.y;
+          emit();
+          break;
+        }
         case 'pan':
           S.view.ox = drag.ox + e.clientX - drag.px;
           S.view.oy = drag.oy + e.clientY - drag.py;

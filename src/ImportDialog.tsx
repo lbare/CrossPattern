@@ -245,6 +245,9 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
   const [colors, setColors] = useState(10);
   const [smooth, setSmooth] = useState(2);
   const [clean, setClean] = useState(1);
+  const [brightness, setBrightness] = useState(0);
+  const [contrast, setContrast] = useState(0);
+  const [saturation, setSaturation] = useState(0);
 
   const [mode, setMode] = useState<Mode>('remove');
   const [tool, setTool] = useState<MarkTool>('brush');
@@ -335,9 +338,10 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
   );
   // Sliders stay responsive while the conversion catches up.
   const dColors = useDeferredValue(colors), dSmooth = useDeferredValue(smooth), dClean = useDeferredValue(clean);
+  const dBright = useDeferredValue(brightness), dContrast = useDeferredValue(contrast), dSat = useDeferredValue(saturation);
   const result = useMemo(
-    () => (sampled ? quantize(sampled, { colors: dColors, smooth: dSmooth, clean: dClean }) : null),
-    [sampled, dColors, dSmooth, dClean],
+    () => (sampled ? quantize(sampled, { colors: dColors, smooth: dSmooth, clean: dClean, brightness: dBright, contrast: dContrast, saturation: dSat }) : null),
+    [sampled, dColors, dSmooth, dClean, dBright, dContrast, dSat],
   );
 
   useEffect(() => {
@@ -495,6 +499,13 @@ export function ImportDialog({ onClose, initialFile }: { onClose: () => void; in
                 <Slider label="Flatten unmarked areas" value={smooth} min={0} max={4} set={setSmooth}
                   hint="Smooths texture and shading. Keep-detail areas are not touched." />
                 <Slider label="Remove stray stitches" value={clean} min={0} max={3} set={setClean} />
+                <details className="adjust">
+                  <summary>Adjust the photo{brightness || contrast || saturation ? ' (changed)' : ''}</summary>
+                  <Slider label="Brightness" value={brightness} min={-100} max={100} set={setBrightness} />
+                  <Slider label="Contrast" value={contrast} min={-100} max={100} set={setContrast} />
+                  <Slider label="Color strength" value={saturation} min={-100} max={100} set={setSaturation} />
+                  <button className="btn small" onClick={() => { setBrightness(0); setContrast(0); setSaturation(0); }}>Reset</button>
+                </details>
               </div>
             </div>
             <figure>

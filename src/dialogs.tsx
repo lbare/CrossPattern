@@ -1,7 +1,8 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { MAX_SIZE, createPattern } from './model';
+import { printChart } from './print';
 import { renderExport } from './render';
-import { S, commitFloating, download, fileBase, openAsNewProject, resizePattern } from './store';
+import { S, commitFloating, download, fileBase, openAsNewProject, resizePattern, trimEmpty } from './store';
 
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode; size?: 'wide' | 'xl' }) {
   useEffect(() => {
@@ -69,6 +70,11 @@ export function ResizeDialog({ onClose }: { onClose: () => void }) {
   const [h, setH] = useState(S.pattern.height);
   return (
     <Modal title="Resize canvas" onClose={onClose}>
+      <div className="fields">
+        <button className="btn full" title="Removes empty rows and columns around the design" onClick={() => { trimEmpty(); onClose(); }}>
+          Trim empty edges
+        </button>
+      </div>
       <SizeFields w={w} h={h} setW={setW} setH={setH} />
       <p className="hint">The top-left corner stays put. Making the canvas smaller trims the right and bottom edges.</p>
       <footer>
@@ -103,7 +109,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   }, [canvas]);
 
   return (
-    <Modal title="Export PNG" onClose={onClose} size="wide">
+    <Modal title="Export" onClose={onClose} size="wide">
       <div className="split">
         <div className="controls">
           <label>Square size: {cell}px
@@ -117,6 +123,14 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         <div className="preview export-preview" ref={box} />
       </div>
       <footer>
+        <button
+          className="btn"
+          title="A cover page with the color key, then the chart split across pages with symbols"
+          onClick={() => { commitFloating(); printChart(S.pattern); onClose(); }}
+        >
+          Print or save as PDF
+        </button>
+        <span className="grow" />
         <button className="btn" onClick={onClose}>Cancel</button>
         <button
           className="btn primary"

@@ -213,15 +213,16 @@ export function ReconvertDialog({ onClose }: { onClose: () => void }) {
 
 // ---- Keyboard shortcuts -------------------------------------------------
 
-const SHORTCUTS: [string, [string, string][]][] = [
+export const SHORTCUTS: [string, [string, string][]][] = [
   ['Tools', [
     ['B', 'Pencil'], ['E', 'Eraser'], ['C', 'Recolor brush'], ['T', 'Tidy brush'], ['O', 'Restore brush'], ['G', 'Fill'],
-    ['I', 'Pick color'], ['L', 'Line'], ['R', 'Rectangle'], ['M', 'Select'], ['K', 'Backstitch'], ['H', 'Move view'],
+    ['I', 'Pick color'], ['L', 'Line'], ['R', 'Rectangle'], ['U', 'Ellipse'], ['M', 'Select'], ['K', 'Backstitch'], ['H', 'Move view'],
   ]],
   ['While painting', [
     ['[ and ]', 'Brush smaller / larger'], ['Alt-click', 'Pick up the color under the cursor'],
     ['Shift-click with Pick color', 'Take the exact shade from the guide photo'],
-    ['Shift-click with Fill', 'Replace that color everywhere'], ['Shift-drag with Rectangle', 'Filled rectangle'],
+    ['Shift-click with Fill', 'Replace that color everywhere'], ['Shift-drag with Rectangle or Ellipse', 'Filled shape'],
+    ['Shift-click in Stitch mode', 'Tick off a whole patch of one color'],
     ['Alt-click with Backstitch', 'Remove a backstitch line'], ['Hold P', 'Show the guide picture in full'],
   ]],
   ['Selection', [
@@ -231,28 +232,6 @@ const SHORTCUTS: [string, [string, string][]][] = [
   ['View and file', [
     ['Scroll', 'Move around'], ['⌘/Ctrl-scroll or pinch', 'Zoom'], ['+ and −', 'Zoom in / out'], ['0', 'Fit to window'],
     ['Space-drag', 'Move the view with any tool'], ['⌘/Ctrl Z', 'Undo'], ['⇧⌘Z or Ctrl Y', 'Redo'], ['⌘/Ctrl S', 'Save a project file'],
-    ['?', 'Show this list'],
+    ['?', 'Open the guide'],
   ]],
 ];
-
-export function HelpDialog({ onClose }: { onClose: () => void }) {
-  return (
-    <Modal title="Keyboard shortcuts" onClose={onClose} size="wide">
-      <div className="shortcuts">
-        {SHORTCUTS.map(([title, rows]) => (
-          <section key={title}>
-            <h3>{title}</h3>
-            <dl>
-              {rows.map(([key, what]) => (
-                <div key={key}><dt>{key}</dt><dd>{what}</dd></div>
-              ))}
-            </dl>
-          </section>
-        ))}
-      </div>
-      <footer>
-        <button className="btn" onClick={onClose}>Close</button>
-      </footer>
-    </Modal>
-  );
-}

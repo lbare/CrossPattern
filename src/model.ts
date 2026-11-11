@@ -44,6 +44,10 @@ export interface Pattern {
   palette: PaletteColor[];
   backstitches: Backstitch[];
   reference?: Reference;
+  /** Fabric color shown behind the stitches. */
+  fabric?: string;
+  /** 1 for every square that has been stitched in real life, for tracking progress. */
+  done?: Uint8Array;
 }
 
 export const MAX_SIZE = 400;
@@ -197,8 +201,11 @@ export function reduceColors(p: Pattern, target: number): void {
   const counts = countCells(p);
   const lab = new Map(p.palette.map((c) => [c.id, hexToOklab(c.hex)]));
   while (p.palette.length > Math.max(1, target)) {
-    let least = p.palette[0];
-    for (const c of p.palette) if ((counts.get(c.id) ?? 0) < (counts.get(least.id) ?? 0)) least = c;
+    // Locked colors are never merged away, though others may merge into them.
+    const free = p.palette.filter((c) => !c.locked);
+    if (!free.length) break;
+    let least = free[0];
+    for (const c of free) if ((counts.get(c.id) ?? 0) < (counts.get(least.id) ?? 0)) least = c;
     const a = lab.get(least.id)!;
     let near = least, nearD = Infinity;
     for (const c of p.palette) {
@@ -235,9 +242,14 @@ export function resized(p: Pattern, width: number, height: number): Pattern {
   const cells = new Uint16Array(width * height);
   const w = Math.min(width, p.width), h = Math.min(height, p.height);
   for (let y = 0; y < h; y++) cells.set(p.cells.subarray(y * p.width, y * p.width + w), y * width);
+  let done: Uint8Array | undefined;
+  if (p.done) {
+    done = new Uint8Array(width * height);
+    for (let y = 0; y < h; y++) done.set(p.done.subarray(y * p.width, y * p.width + w), y * width);
+  }
   const fits = (b: Backstitch) =>
     Math.max(b.x1, b.x2) <= width && Math.max(b.y1, b.y2) <= height;
-  return { ...p, width, height, cells, backstitches: p.backstitches.filter(fits) };
+  return { ...p, width, height, cells, done, backstitches: p.backstitches.filter(fits) };
 }
 
 /** Cuts the canvas down to a rectangle, carrying backstitches and guide pictures along. */
@@ -258,7 +270,33 @@ export function cropped(p: Pattern, r: { x: number; y: number; w: number; h: num
     }
     reference = { photo: reference.photo, rect: { ...reference.rect, x: reference.rect.x - r.x, y: reference.rect.y - r.y }, converted };
   }
-  return { ...p, width: r.w, height: r.h, cells, backstitches, reference };
+  let done: Uint8Array | undefined;
+  if (p.done) {
+    done = new Uint8Array(r.w * r.h);
+    for (let y = 0; y < r.h; y++) done.set(p.done.subarray((r.y + y) * p.width + r.x, (r.y + y) * p.width + r.x + r.w), y * r.w);
+  }
+  return { ...p, width: r.w, height: r.h, cells, done, backstitches, reference };
+}
+
+/** The smallest rectangle that holds every stitch and backstitch, or null for an empty pattern. */
+export function contentBounds(p: Pattern): { x: number; y: number; w: number; h: number } | null {
+  let x0 = p.width, y0 = p.height, x1 = 0, y1 = 0;
+  for (let y = 0; y < p.height; y++) {
+    for (let x = 0; x < p.width; x++) {
+      if (!p.cells[y * p.width + x]) continue;
+      if (x < x0) x0 = x;
+      if (x + 1 > x1) x1 = x + 1;
+      if (y < y0) y0 = y;
+      if (y + 1 > y1) y1 = y + 1;
+    }
+  }
+  for (const b of p.backstitches) {
+    x0 = Math.min(x0, Math.floor(Math.min(b.x1, b.x2))); x1 = Math.max(x1, Math.ceil(Math.max(b.x1, b.x2)));
+    y0 = Math.min(y0, Math.floor(Math.min(b.y1, b.y2))); y1 = Math.max(y1, Math.ceil(Math.max(b.y1, b.y2)));
+  }
+  x1 = Math.max(x1, x0 + 1);
+  y1 = Math.max(y1, y0 + 1);
+  return x0 < p.width && y0 < p.height ? { x: x0, y: y0, w: Math.min(x1, p.width) - x0, h: Math.min(y1, p.height) - y0 } : null;
 }
 
 /** Grid-line segments that run along every boundary between stitched and empty squares. */
@@ -301,7 +339,7 @@ export function outlineCells(p: Pattern): number[] {
 
 // ---- Saving and loading -------------------------------------------------
 
-function encodeRuns(cells: Uint16Array): number[] {
+function encodeRuns(cells: ArrayLike<number>): number[] {
   const runs: number[] = [];
   for (let i = 0; i < cells.length; ) {
     const v = cells[i];
@@ -340,6 +378,8 @@ export function serialize(p: Pattern, withPhoto = true): string {
     palette: p.palette,
     backstitches: p.backstitches,
     cells: encodeRuns(p.cells),
+    fabric: p.fabric,
+    done: p.done?.some((v) => v) ? encodeRuns(p.done) : undefined,
     reference,
   });
 }
@@ -373,5 +413,10 @@ export function deserialize(text: string): Pattern {
     };
     if (!reference.photo && !reference.converted) reference = undefined;
   }
-  return { name: String(d.name ?? 'Untitled pattern'), width: d.width, height: d.height, cells, palette, backstitches, reference };
+  const fabric = typeof d.fabric === 'string' && /^#[0-9a-f]{6}$/i.test(d.fabric) ? d.fabric.toLowerCase() : undefined;
+  const done = Array.isArray(d.done) ? Uint8Array.from(decodeRuns(d.done, cells.length), (v) => (v ? 1 : 0)) : undefined;
+  return {
+    name: String(d.name ?? 'Untitled pattern'), width: d.width, height: d.height, cells, palette, backstitches,
+    reference, fabric, done,
+  };
 }

@@ -3,13 +3,13 @@ import { clamp, hslToHex, rgbToHex } from './color';
 import { ProjectRecord, deleteProject, getProject, listProjects, putProject } from './db';
 import { FABRIC, buildCellImage } from './render';
 import {
-  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, createPattern, cropped, deserialize, despeckle, mergeColor,
+  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, contentBounds, createPattern, cropped, deserialize, despeckle, mergeColor,
   outlineCells, outlineEdges,
   nextId, nextSymbol, reduceColors, removeColor, removeUnused, resized, serialize,
 } from './model';
 
 export type Tool =
-  | 'pencil' | 'eraser' | 'recolor' | 'tidy' | 'restore' | 'fill' | 'picker' | 'line' | 'rect' | 'select' | 'backstitch' | 'pan';
+  | 'pencil' | 'eraser' | 'recolor' | 'tidy' | 'restore' | 'fill' | 'picker' | 'line' | 'rect' | 'ellipse' | 'select' | 'backstitch' | 'pan';
 export type RefMode = 'off' | 'photo' | 'converted';
 
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -24,6 +24,8 @@ interface Snapshot {
   palette: PaletteColor[];
   backstitches: Backstitch[];
   reference?: Reference;
+  fabric?: string;
+  done?: Uint8Array;
 }
 
 const AUTOSAVE_KEY = 'crosspattern.autosave';
@@ -50,6 +52,10 @@ export const S = {
   showGrid: true,
   /** Palette id to spotlight (others are faded), or 0. */
   highlight: 0,
+  /** Stitch mode: clicking squares ticks them off as stitched instead of editing the pattern. */
+  stitchMode: false,
+  /** On narrow screens the color panel is a drawer; this is whether it is open. */
+  panelOpen: false,
   /** Paint both halves at once, mirrored left to right. */
   mirror: false,
   /** Which guide picture is shown over the pattern, how strongly, and whether it is being peeked at in full. */
@@ -99,7 +105,7 @@ function thumbnail(p: Pattern): string {
   c.width = Math.max(1, Math.round(p.width * k));
   c.height = Math.max(1, Math.round(p.height * k));
   const g = c.getContext('2d')!;
-  g.fillStyle = FABRIC;
+  g.fillStyle = p.fabric ?? FABRIC;
   g.fillRect(0, 0, c.width, c.height);
   g.imageSmoothingEnabled = k < 1;
   g.drawImage(buildCellImage(p, 0), 0, 0, c.width, c.height);
@@ -192,6 +198,8 @@ function snapshot(): Snapshot {
     palette: p.palette.map((c) => ({ ...c })),
     backstitches: p.backstitches.map((b) => ({ ...b })),
     reference: p.reference,
+    fabric: p.fabric,
+    done: p.done?.slice(),
   };
 }
 
@@ -374,6 +382,36 @@ export function selectedRect(): Rect | null {
   const x0 = Math.max(0, r.x), y0 = Math.max(0, r.y);
   const x1 = Math.min(S.pattern.width, r.x + r.w), y1 = Math.min(S.pattern.height, r.y + r.h);
   return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+}
+
+/** Trims away empty rows and columns around the design. */
+export function trimEmpty(): boolean {
+  commitFloating();
+  const p = S.pattern, r = contentBounds(p);
+  if (!r || (r.w === p.width && r.h === p.height)) return false;
+  setPattern(cropped(p, r));
+  return true;
+}
+
+export function setFabric(hex: string | undefined): void {
+  if (S.pattern.fabric === hex) return;
+  pushUndo('fabric');
+  S.pattern.fabric = hex;
+  emit();
+}
+
+/** The progress map, created on first use. */
+export function doneMap(): Uint8Array {
+  const p = S.pattern;
+  if (!p.done || p.done.length !== p.cells.length) p.done = new Uint8Array(p.cells.length);
+  return p.done;
+}
+
+export function clearProgress(): void {
+  if (!S.pattern.done) return;
+  pushUndo();
+  S.pattern.done = undefined;
+  emit();
 }
 
 export function cropToSelection(): void {

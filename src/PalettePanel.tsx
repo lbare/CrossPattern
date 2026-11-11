@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { inkFor } from './color';
 import { SYMBOLS, countCells } from './model';
+import { FABRIC } from './render';
 import {
   RefMode, S, addColor, addOutline, deleteColor, emit, loadReferencePhoto, mergeInto, reduceTo, removeReference,
-  removeStrays, removeUnusedColors, setColorHex, setColorSymbol, sortPaletteByUse, toggleLock, useStore,
+  clearProgress, removeStrays, removeUnusedColors, setColorHex, setColorSymbol, setFabric, sortPaletteByUse, toggleLock,
+  useStore,
 } from './store';
 
 function ReferenceSection() {
@@ -71,6 +73,15 @@ export function PalettePanel() {
   const counts = useMemo(() => countCells(p), [S.cellsVersion]);
   const cur = p.palette.find((c) => c.id === S.colorId);
   const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  // Stitched squares per color, for progress tracking.
+  const doneCounts = useMemo(() => {
+    const m = new Map<number, number>();
+    if (p.done) for (let i = 0; i < p.cells.length; i++) if (p.done[i] && p.cells[i]) m.set(p.cells[i], (m.get(p.cells[i]) ?? 0) + 1);
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [S.cellsVersion]);
+  const doneTotal = [...doneCounts.values()].reduce((a, b) => a + b, 0);
+  const showProgress = S.stitchMode || doneTotal > 0;
   const usedCount = p.palette.filter((c) => counts.has(c.id)).length;
 
   const [hexText, setHexText] = useState(cur?.hex ?? '');
@@ -168,7 +179,9 @@ export function PalettePanel() {
             <span className="swatch" style={{ background: c.hex, color: inkFor(c.hex) }}>{c.symbol}</span>
             <span className="code">{c.hex}</span>
             {c.locked && <span className="lock" title="Locked">locked</span>}
-            <span className="count">{counts.get(c.id) ?? 0}</span>
+            <span className="count">
+              {showProgress ? `${doneCounts.get(c.id) ?? 0} / ` : ''}{counts.get(c.id) ?? 0}
+            </span>
           </li>
         ))}
       </ul>
@@ -229,7 +242,20 @@ export function PalettePanel() {
         {note && <p className="note">{note}</p>}
       </div>
 
-      <div className="totals">{total.toLocaleString()} stitches · {usedCount} colors in use</div>
+      {showProgress && (
+        <div className="progress">
+          <div className="bar"><span style={{ width: total ? `${(doneTotal / total) * 100}%` : 0 }} /></div>
+          <span>{doneTotal.toLocaleString()} of {total.toLocaleString()} stitched ({total ? Math.round((doneTotal / total) * 100) : 0}%)</span>
+          <button className="btn small" disabled={!doneTotal} onClick={clearProgress}>Clear</button>
+        </div>
+      )}
+      <div className="totals">
+        <span>{total.toLocaleString()} stitches · {usedCount} colors in use</span>
+        <label title="Fabric color: what empty squares look like">
+          Fabric
+          <input type="color" value={p.fabric ?? FABRIC} onChange={(e) => setFabric(e.target.value)} />
+        </label>
+      </div>
     </aside>
   );
 }
