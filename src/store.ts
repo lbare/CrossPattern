@@ -54,6 +54,16 @@ export const S = {
   highlight: 0,
   /** Stitch mode: clicking squares ticks them off as stitched instead of editing the pattern. */
   stitchMode: false,
+  /** Which screen is showing: the editor, or the screen for working through a pattern stitch by stitch. */
+  screen: 'edit' as 'edit' | 'stitch',
+  /** On the stitch screen: the color being worked, a square in the section being worked (-1 for none),
+   *  whether other colors are faded out and locked against ticking, and that section's squares. */
+  stitchColor: 0,
+  stitchCell: -1,
+  onlyFocus: true,
+  sectionMask: null as Uint8Array | null,
+  /** A rectangle to bring into view as soon as a newly shown canvas knows its size. */
+  pendingRect: null as Rect | null,
   /** On narrow screens the color panel is a drawer; this is whether it is open. */
   panelOpen: false,
   /** Paint both halves at once, mirrored left to right. */
@@ -296,6 +306,20 @@ export function zoomAt(px: number, py: number, factor: number): void {
   v.ox = Math.round(px - ((px - v.ox) * scale) / v.scale);
   v.oy = Math.round(py - ((py - v.oy) * scale) / v.scale);
   v.scale = scale;
+  S.autoFit = false;
+  emit(false);
+}
+
+/** Zooms and moves the view so a rectangle of squares fills most of it. */
+export function showRect(r: Rect, maxScale = 36): void {
+  const { w, h } = S.viewport;
+  const pad = Math.min(48, Math.max(16, Math.min(w, h) * 0.08));
+  const scale = clamp(Math.min((w - pad * 2) / r.w, (h - pad * 2) / r.h), 1, maxScale);
+  S.view = {
+    scale,
+    ox: Math.round(w / 2 - (r.x + r.w / 2) * scale),
+    oy: Math.round(h / 2 - (r.y + r.h / 2) * scale),
+  };
   S.autoFit = false;
   emit(false);
 }

@@ -425,3 +425,76 @@ button { touch-action: manipulation; }
 .arealist .line select { flex: 1; min-width: 0; max-width: none; }
 .arealist .muted { font-size: 11px; }
 .controls .seg + .seg { margin-top: -4px; }
+
+/* ---- Stitch screen ---- */
+.g-stitch .stitch-btn { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.stitch { height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--bg); }
+.stitch-top {
+  display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.stitch-top .title { flex: 1; min-width: 0; display: grid; }
+.stitch-top .title b, .stitch-top .title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stitch-top .title span { font-size: 12px; }
+.stitch-main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; min-height: 0; }
+.stitch-side { display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-left: 1px solid var(--border); }
+.stitch .dock { display: grid; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border); }
+.stitch .current { display: flex; align-items: center; gap: 12px; }
+.stitch .current .what { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.stitch .current .muted { font-size: 12px; }
+.stitch .chip {
+  width: 26px; height: 26px; border-radius: 6px; flex: none; display: grid; place-items: center; font-size: 14px;
+  border: 1px solid rgba(128, 128, 128, 0.5); line-height: 1;
+}
+.stitch .chip.big { width: 44px; height: 44px; font-size: 22px; border-radius: 9px; }
+.stitch .bar { display: block; height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+.stitch .bar span { display: block; height: 100%; background: var(--accent); }
+.stitch .where { display: grid; gap: 2px; font-size: 13px; }
+.stitch .where .muted { font-size: 12px; }
+.stitch .nav { display: flex; gap: 6px; align-items: center; }
+.stitch .nav .btn { height: 40px; }
+.stitch .nav .grow { flex: 1; }
+.stitch .celebrate { color: var(--accent); font-weight: 600; }
+.stitch .toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.stitch .toggles .check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.stitch .tabs { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.stitch .tabs button {
+  flex: 1; height: 34px; border: 0; background: var(--surface); cursor: pointer; font-size: 13px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.stitch .tabs button + button { border-left: 1px solid var(--border); }
+.stitch .tabs button.on { background: var(--accent-soft); font-weight: 600; }
+.stitch .lists { flex: 1; min-height: 0; overflow-y: auto; }
+.stitch-list { list-style: none; margin: 0; padding: 6px; display: grid; gap: 2px; }
+.stitch-list button {
+  width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 6px 8px; text-align: left;
+  border: 1px solid transparent; border-radius: 7px; background: none; cursor: pointer;
+}
+.stitch-list button:hover { background: var(--bg); }
+.stitch-list li.on button { border-color: var(--accent); background: var(--accent-soft); }
+.stitch-list li.finished button { opacity: 0.55; }
+.stitch-list .what { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; }
+.stitch-list .code { font-family: ui-monospace, Menlo, monospace; }
+.stitch-list .nums { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stitch-list .num {
+  width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; flex: none;
+  background: var(--bg); font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.stitch-hint { padding: 5px 12px; font-size: 12px; color: var(--muted); background: var(--surface); border-top: 1px solid var(--border); }
+.stitch-empty { padding: 40px 20px; text-align: center; color: var(--muted); }
+
+@media (max-width: 760px) {
+  /* Phone: the pattern on top, the controls underneath within reach of a thumb, the lists as a sheet. */
+  .stitch-top { gap: 8px; padding: 6px 8px; flex-wrap: nowrap; }
+  .stitch-top .help-btn, .stitch-top .group:has(.btn[title='Show the whole pattern']) .btn.icon { display: none; }
+  .stitch-top .title span { font-size: 11px; }
+  .stitch-top .label { display: none; }
+  .stitch-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .stitch-side { border-left: 0; border-top: 1px solid var(--border); max-height: 62dvh; }
+  .stitch .dock { gap: 8px; padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); border-bottom: 0; }
+  .stitch .lists { display: none; order: -1; max-height: 42dvh; border-bottom: 1px solid var(--border); }
+  .stitch.sheet-open .lists { display: block; }
+  .stitch .chip.big { width: 38px; height: 38px; font-size: 19px; }
+  .stitch .nav .btn { height: 44px; }
+  .stitch-hint { display: none; }
+}

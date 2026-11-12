@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { clamp } from './color';
+import { clamp, inkFor } from './color';
+import { currentSection, sectionCells, sections, tickable, ticked } from './stitch';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
   S, Tool, PatchAction, addColor, clearPatch, patchAction, selectPatch, selectSameColors, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, doneMap, dropUndo, emit,
   fitView, keys, liftSelection, lockedIds, openDialog, pushUndo, refImage, samplePhoto, selectedRect, subscribe, transformSelection,
-  undo, useStore, zoomAt,
+  showRect, undo, useStore, zoomAt,
 } from './store';
 
 type CellFn = (x: number, y: number) => void;
@@ -38,8 +39,19 @@ export function CanvasView() {
       const w = wrap.clientWidth, h = wrap.clientHeight, dpr = window.devicePixelRatio || 1;
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
+      const was = S.viewport;
       S.viewport = { w, h };
-      if (S.autoFit && w > 0) fitView();
+      const onStitch = !!wrap.closest('.stitch');
+      // A section waiting to be shown belongs to the stitch screen's canvas, not the editor's.
+      if (S.pendingRect && w > 0 && onStitch) { const r = S.pendingRect; S.pendingRect = null; showRect(r); }
+      else if (S.autoFit && w > 0) fitView();
+      else if (w > 0 && was.w > 0) {
+        // The space changed size (a phone turned round, a window resized): keep the same part of the
+        // pattern in the middle, and on the stitch screen re-fit the section if the space changed a lot.
+        const k = onStitch ? currentSection() : -1;
+        if (k >= 0 && Math.abs(w - was.w) > was.w * 0.25) showRect(sections().list[k]);
+        else { S.view.ox += Math.round((w - was.w) / 2); S.view.oy += Math.round((h - was.h) / 2); }
+      }
       schedule();
     };
 
@@ -206,23 +218,53 @@ export function CanvasView() {
         ctx.lineCap = 'butt';
       }
 
-      const patch = S.patch;
-      if (patch && patch.mask.length === p.cells.length) {
-        // The selected shape: a light wash over its squares and a two-tone line around its edge.
-        const x0 = clamp(Math.floor(-ox / scale), 0, p.width), x1 = clamp(Math.ceil((w - ox) / scale), 0, p.width);
-        const y0 = clamp(Math.floor(-oy / scale), 0, p.height), y1 = clamp(Math.ceil((h - oy) / scale), 0, p.height);
-        const on = (x: number, y: number) => x >= 0 && y >= 0 && x < p.width && y < p.height && patch.mask[y * p.width + x] === 1;
-        ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      // The part of the pattern on screen, in squares.
+      const vx0 = clamp(Math.floor(-ox / scale), 0, p.width), vx1 = clamp(Math.ceil((w - ox) / scale), 0, p.width);
+      const vy0 = clamp(Math.floor(-oy / scale), 0, p.height), vy1 = clamp(Math.ceil((h - oy) / scale), 0, p.height);
+      /** The line around the edge of a set of squares. */
+      const edgeOf = (mask: Uint8Array, wash: string | null) => {
+        const on = (x: number, y: number) => x >= 0 && y >= 0 && x < p.width && y < p.height && mask[y * p.width + x] === 1;
         const edge = new Path2D();
-        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        if (wash) ctx.fillStyle = wash;
+        for (let y = vy0; y < vy1; y++) for (let x = vx0; x < vx1; x++) {
           if (!on(x, y)) continue;
-          ctx.fillRect(x * scale, y * scale, scale, scale);
+          if (wash) ctx.fillRect(x * scale, y * scale, scale, scale);
           const l = x * scale + 0.5, t = y * scale + 0.5, r = (x + 1) * scale + 0.5, b = (y + 1) * scale + 0.5;
           if (!on(x, y - 1)) { edge.moveTo(l, t); edge.lineTo(r, t); }
           if (!on(x, y + 1)) { edge.moveTo(l, b); edge.lineTo(r, b); }
           if (!on(x - 1, y)) { edge.moveTo(l, t); edge.lineTo(l, b); }
           if (!on(x + 1, y)) { edge.moveTo(r, t); edge.lineTo(r, b); }
         }
+        return edge;
+      };
+
+      if (S.stitchMode && p.done && scale >= 6) {
+        // Stitched squares get a small cross, so they read as done even next to faded-out colors.
+        const ink = inkFor(p.fabric ?? FABRIC) === '#000000' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.6)';
+        const m = scale * 0.28, cross = new Path2D();
+        for (let y = vy0; y < vy1; y++) for (let x = vx0; x < vx1; x++) {
+          const i = y * p.width + x;
+          if (!p.done[i] || !p.cells[i] || (S.highlight && p.cells[i] !== S.highlight)) continue;
+          const l = x * scale + m, t = y * scale + m, r = (x + 1) * scale - m, b = (y + 1) * scale - m;
+          cross.moveTo(l, t); cross.lineTo(r, b); cross.moveTo(r, t); cross.lineTo(l, b);
+        }
+        ctx.lineWidth = Math.max(1, scale * 0.07); ctx.strokeStyle = ink; ctx.lineCap = 'round';
+        ctx.stroke(cross);
+        ctx.lineCap = 'butt';
+      }
+
+      const section = S.sectionMask;
+      if (S.stitchMode && section && section.length === p.cells.length) {
+        // The section being worked: a bold two-tone line around it.
+        const edge = edgeOf(section, null);
+        ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke(edge);
+        ctx.lineWidth = 2; ctx.strokeStyle = '#e11d74'; ctx.stroke(edge);
+      }
+
+      const patch = S.patch;
+      if (patch && patch.mask.length === p.cells.length) {
+        // The selected shape: a light wash over its squares and a two-tone line around its edge.
+        const edge = edgeOf(patch.mask, 'rgba(255,255,255,0.22)');
         ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff'; ctx.stroke(edge);
         ctx.lineWidth = 1.25; ctx.strokeStyle = '#111'; ctx.setLineDash([4, 3]); ctx.stroke(edge); ctx.setLineDash([]);
       }
@@ -301,9 +343,11 @@ export function CanvasView() {
       const i = y * p.width + x, id = p.cells[i];
       if (!id) return;
       if (S.stitchMode) {
+        if (!tickable(i)) return;
         pushUndo();
         const done = doneMap();
         done[i] = done[i] ? 0 : 1;
+        ticked(i);
         return emit();
       }
       // Say what the stitch is, and make it the current color so it is lit up in the color list.
@@ -345,20 +389,13 @@ export function CanvasView() {
       if (e.button !== 0) return;
       if (S.stitchMode) {
         // Stitch mode: tick squares off as stitched (or untick them) instead of editing the pattern.
-        if (!inside(c.x, c.y) || !p.cells[c.y * p.width + c.x]) return;
+        if (!inside(c.x, c.y) || !tickable(c.y * p.width + c.x)) return;
         pushUndo();
         const done = doneMap(), i = c.y * p.width + c.x, value = done[i] ? 0 : 1;
+        ticked(i);
         if (e.shiftKey) {
-          // Shift ticks off the whole connected patch of this color.
-          const color = p.cells[i], stack = [i], seen = new Uint8Array(done.length);
-          seen[i] = 1;
-          while (stack.length) {
-            const j = stack.pop()!, jx = j % p.width;
-            done[j] = value;
-            for (const n of [jx > 0 ? j - 1 : -1, jx < p.width - 1 ? j + 1 : -1, j - p.width, j + p.width]) {
-              if (n >= 0 && n < done.length && !seen[n] && p.cells[n] === color) { seen[n] = 1; stack.push(n); }
-            }
-          }
+          // Shift ticks off the whole section: the patch of this color, joined corner to corner.
+          for (const j of sectionCells(i)) done[j] = value;
         } else {
           done[i] = value;
           drag = { mode: 'done', value, lx: c.x, ly: c.y };
@@ -469,7 +506,7 @@ export function CanvasView() {
         case 'done': {
           const done = doneMap();
           for (const [x, y] of linePoints(drag.lx, drag.ly, c.x, c.y)) {
-            if (inside(x, y) && p.cells[y * p.width + x]) done[y * p.width + x] = drag.value;
+            if (inside(x, y) && tickable(y * p.width + x)) { done[y * p.width + x] = drag.value; ticked(y * p.width + x); }
           }
           drag.lx = c.x;
           drag.ly = c.y;

@@ -5,6 +5,10 @@ import { PalettePanel } from './PalettePanel';
 import { ExportDialog, NewDialog, ResizeDialog } from './dialogs';
 import { ProjectsDialog, ReconvertDialog } from './extras';
 import { GuideDialog } from './guide';
+import { StitchScreen } from './StitchScreen';
+import {
+  currentSection, isFinished, nextUnfinished, openStitch, sections, setSectionDone, startScreen, stepSection, syncScreen, undoFloor,
+} from './stitch';
 import {
   S, Tool, clearPatch, commitFloating, copySelection, patchAction, cutSelection, deleteSelection, emit, fitView, keys, nudgeSelection,
   openDialog, openFile, paste, redo, renamePattern, saveFile, selectAll, setTool, undo, useStore, zoomBy,
@@ -71,6 +75,25 @@ export function App() {
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (k === ' ') { keys.space = true; emit(false); e.preventDefault(); return; }
+      if (S.screen === 'stitch') {
+        // The stitch screen has its own few keys: move between sections, tick one off, undo, zoom.
+        if (mod && k === 'z') { if (e.shiftKey) redo(); else if (S.undo.length > undoFloor) undo(); }
+        else if (mod && k === 'y') redo();
+        else if (mod) return;
+        else if (k === 'arrowright' || k === 'arrowdown') stepSection(1);
+        else if (k === 'arrowleft' || k === 'arrowup') stepSection(-1);
+        else if (k === 'enter') {
+          const n = currentSection(), s = sections().list[n];
+          if (s) { if (isFinished(s)) setSectionDone(n, false); else { setSectionDone(n, true); nextUnfinished(); } }
+        }
+        else if (k === '=' || k === '+') zoomBy(1.25);
+        else if (k === '-') zoomBy(0.8);
+        else if (k === '0') fitView();
+        else if (k === '?') openDialog('help');
+        else return;
+        e.preventDefault();
+        return;
+      }
       if (k === 'p' && !mod) { if (!S.refPeek) { S.refPeek = true; emit(false); } return; }
       if (mod) {
         if (k === 'z') { e.shiftKey ? redo() : undo(); }
@@ -106,6 +129,10 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKeyUp);
+    // The stitch screen lives at #stitch, so the phone's back button leaves it and a refresh stays on it.
+    window.addEventListener('hashchange', syncScreen);
+    window.addEventListener('popstate', syncScreen);
+    startScreen();
     // On a phone the natural first thing is to look around, not to draw.
     if (window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 760) setTool('pan');
     // First visit: open the guide once so new people know where to start.
@@ -121,11 +148,22 @@ export function App() {
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('hashchange', syncScreen);
+      window.removeEventListener('popstate', syncScreen);
     };
   }, []);
 
   const p = S.pattern;
   const tool = TOOLS.find((t) => t.id === S.tool)!;
+
+  if (S.screen === 'stitch') {
+    return (
+      <>
+        <StitchScreen />
+        {dialog === 'help' && <GuideDialog start="Stitching" onClose={() => setDialog(null)} />}
+      </>
+    );
+  }
 
   return (
     <div
@@ -148,6 +186,15 @@ export function App() {
           onChange={(e) => renamePattern(e.target.value)}
           aria-label="Pattern name"
         />
+        <div className="group g-stitch">
+          <button
+            className="btn stitch-btn"
+            title="Work through the pattern color by color, ticking stitches off as you go"
+            onClick={() => { commitFloating(); openStitch(); }}
+          >
+            Stitch ✓
+          </button>
+        </div>
         <div className="group g-phone narrow-only">
           <button className={'btn' + (S.panelOpen ? ' on' : '')} onClick={() => { S.panelOpen = !S.panelOpen; emit(false); }}>Colors</button>
           <button
@@ -206,13 +253,6 @@ export function App() {
           >
             Mirror
           </button>
-          <button
-            className={'btn' + (S.stitchMode ? ' on' : '')}
-            title="Track your real-life progress: click squares to tick them off as stitched"
-            onClick={() => { commitFloating(); S.selection = null; S.patch = null; S.info = null; S.stitchMode = !S.stitchMode; emit(false); }}
-          >
-            Stitch mode
-          </button>
         </div>
         <div className="group g-help">
           <button className="btn" onClick={() => setDialog('help')} title="How everything works, and keyboard shortcuts (?)">Guide</button>
@@ -249,9 +289,6 @@ export function App() {
           {error ? <span className="error">{error}</span>
             : !S.storageOk ? <span className="error">This browser window is not saving projects (private browsing?). Use Save to keep a file.</span>
             : S.info ? <b>{S.info}</b>
-            : S.stitchMode ? (S.touch
-              ? <><b>Stitch mode</b> — Tap a square to tick it off as stitched; tap again to untick. Drag to move, pinch to zoom.</>
-              : <><b>Stitch mode</b> — Click or drag to tick squares off as stitched; click again to untick. Shift-click ticks a whole patch.</>)
             : S.tool === 'pan' && S.touch ? <><b>Looking around</b> — Drag to move, pinch to zoom, tap a stitch to see its color.</>
             : <><b>{tool.label}</b> — {tool.hint}</>}
         </span>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hexToRgb, inkFor, oklabToRgb, rgbToHex, rgbToOklab } from './color';
 import {
-  Pattern, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints,
+  Pattern, colorSections, connectedCells, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints,
   mergeColor, outlineCells, outlineEdges, paletteFromHexes, reduceColors, removeColor, removeUnused, replaceAll,
   resized, serialize, tidyCell,
 } from './model';
@@ -193,5 +193,32 @@ describe('saving and loading', () => {
     const data = JSON.parse(serialize(grid(['12'])));
     data.palette = data.palette.filter((c: { id: number }) => c.id !== 2);
     expect(rowsOf(deserialize(JSON.stringify(data)))).toEqual(['10']);
+  });
+});
+
+describe('sections', () => {
+  it('joins stitches corner to corner, or only side by side when asked', () => {
+    const p = grid(['1000', '0100', '0010']);
+    expect(connectedCells(p.cells, 4, 3, 0)).toHaveLength(3);
+    expect(connectedCells(p.cells, 4, 3, 0, false)).toHaveLength(1);
+  });
+  it('splits one color into separate patches in reading order', () => {
+    const p = grid(['1100022', '1100022', '0000000', '0111000']);
+    const { list, at } = colorSections(p, 1);
+    expect(list).toHaveLength(2);
+    expect(list[0]).toMatchObject({ x: 0, y: 0, w: 2, h: 2 });
+    expect(list[1]).toMatchObject({ x: 1, y: 3, w: 3, h: 1 });
+    expect(at[0]).toBe(0);
+    expect(at[3 * 7 + 2]).toBe(1);
+    expect(at[5]).toBe(-1);
+  });
+  it('orders patches on the same row left to right', () => {
+    const { list } = colorSections(grid(['01010']), 1);
+    expect(list.map((s) => s.x)).toEqual([1, 3]);
+  });
+  it('counts how much of each patch is stitched', () => {
+    const p = grid(['110', '001']);
+    p.done = Uint8Array.from([1, 0, 0, 0, 0, 1]);
+    expect(colorSections(p, 1).list.map((s) => s.done)).toEqual([2]);
   });
 });

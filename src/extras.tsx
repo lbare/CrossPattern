@@ -222,12 +222,15 @@ export const SHORTCUTS: [string, [string, string][]][] = [
     ['[ and ]', 'Brush smaller / larger'], ['Alt-click', 'Pick up the color under the cursor'],
     ['Shift-click with Pick color', 'Take the exact shade from the guide photo'],
     ['Shift-click with Fill', 'Replace that color everywhere'], ['Shift-drag with Rectangle or Ellipse', 'Filled shape'],
-    ['Shift-click in Stitch mode', 'Tick off a whole patch of one color'],
     ['Alt-click with Backstitch', 'Remove a backstitch line'], ['Hold P', 'Show the guide picture in full'],
   ]],
   ['Selection', [
     ['⌘/Ctrl A', 'Select everything'], ['Arrow keys', 'Nudge the selection one square'], ['⌘/Ctrl C, X, V', 'Copy, cut, paste'],
     ['Delete', 'Clear the selection'], ['Esc', 'Finish and deselect'],
+  ]],
+  ['Stitch screen', [
+    ['← and →', 'Previous / next section'], ['Enter', 'Tick the current section off (or untick it)'],
+    ['Shift-click', 'Tick a whole section'], ['⌘/Ctrl Z', 'Undo the last tick'],
   ]],
   ['View and file', [
     ['Scroll', 'Move around'], ['⌘/Ctrl-scroll or pinch', 'Zoom'], ['+ and −', 'Zoom in / out'], ['0', 'Fit to window'],

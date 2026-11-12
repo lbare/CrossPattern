@@ -4,7 +4,7 @@ import { SHORTCUTS } from './extras';
 import convertShot from '../docs/convert.png';
 import editorShot from '../docs/editor.png';
 import guideShot from '../docs/guide-photo.jpg';
-import stitchShot from '../docs/stitch-mode.png';
+import stitchShot from '../docs/stitching.png';
 
 /** The in-app guide. Each section is a list of [heading, explanation] pairs. */
 const SECTIONS: { title: string; intro?: string; image?: [string, string]; items: [string, string][] }[] = [
@@ -14,6 +14,7 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
     image: [editorShot, 'The editor with a pattern made from a photo of a kitten and a plant'],
     items: [
       ['Draw from scratch', 'Pick a color on the right, pick a tool on the left, and click or drag on the grid. Every square is one stitch. The bold lines mark every tenth stitch.'],
+      ['Stitching it', 'When the pattern is ready, Stitch ✓ opens a screen for working through it color by color and section by section, ticking stitches off as you go. It works well on a phone. See "Stitching".'],
       ['Start from a picture', 'Press Convert picture, choose a photo, crop it to the size you want to stitch, then mark what to keep, flatten or remove. See "Converting a picture".'],
       ['Moving around', 'Scroll to move, pinch or hold ⌘/Ctrl while scrolling to zoom, and press 0 to fit the pattern to the window. Hold Space and drag to move with any tool. With the Move view tool, clicking a stitch tells you its color, symbol and how many there are.'],
       ['Nothing is lost', 'Every change is saved automatically, and Undo (⌘/Ctrl Z) goes back up to 100 steps.'],
@@ -80,13 +81,17 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
   },
   {
     title: 'Stitching',
-    image: [stitchShot, 'Stitch mode with symbols: finished squares are faded and progress is counted'],
+    intro: 'When you sit down to stitch, press Stitch ✓ in the editor. The stitch screen takes you through the pattern one color at a time, and one section of that color at a time, ticking stitches off as you go. Everything is saved as you tick.',
+    image: [stitchShot, 'The stitch screen: one color highlighted, finished stitches crossed out, and the current section outlined'],
     items: [
-      ['Stitch mode', 'Turn on Stitch mode to track real-life progress. Click or drag over squares to tick them off as stitched; they fade so what is left stands out. Click again to untick.'],
-      ['Whole patches', 'Shift-click ticks off the whole connected patch of one color.'],
-      ['Progress', 'The palette shows stitched and total counts per color, and the bottom of the panel shows overall progress. Progress is saved with the project.'],
-      ['Symbols', 'Turn on Symbols to see each color\'s chart symbol in its squares, which helps tell similar shades apart.'],
-      ['On a phone', 'A pattern opens ready to look at: drag to move, pinch to zoom, and tap a stitch to see its color, symbol and count. In Stitch mode a tap ticks a square off and a drag still moves the view. Colors opens the palette, and Tools brings out the drawing tools if you want them. Converting pictures and detailed drawing are easier on a computer.'],
+      ['One color at a time', 'Pick a color under Colors. Every other color fades out, so the stitches you are working stand out, and only stitches of that color can be ticked. Untick "Only this color" to see and tick everything.'],
+      ['Section by section', 'A section is one separate patch of the color, joined side by side or corner to corner. Sections are numbered from the top of the pattern down, and the current one is outlined in pink. The column and row it starts at match the numbers on a printed chart.'],
+      ['Moving between sections', 'Next and Prev move to the next or previous section and bring it into view. Section done ticks every stitch in it and moves on to the next unfinished one. The Sections list shows them all with their progress; tap one to go to it.'],
+      ['Ticking single stitches', 'Tap or click a stitch to tick it, and again to untick. On a computer you can drag across several, and Shift-click ticks a whole section. Ticked stitches are faded and crossed out. Undo takes back the last tick.'],
+      ['Finishing a color', 'When every stitch of a color is done, Next color moves on to the next one with stitches left. Your progress for each color, and for the whole pattern, shows in the Colors list and at the top.'],
+      ['On a phone', 'The pattern fills the top of the screen and the controls sit underneath, in reach of your thumb. Tap a stitch to tick it, drag to move and pinch to zoom. Colors and Sections open as a list over the pattern. Keep screen on stops the phone going dark while you stitch, and the back button returns to the editor.'],
+      ['Picking up where you left off', 'The color and section you were on are remembered for each project. If you leave the site on the stitch screen, it opens there next time.'],
+      ['Keys', 'On a computer, ← and → move between sections, Enter ticks the current section off, and ⌘/Ctrl Z undoes.'],
     ],
   },
   {
@@ -101,8 +106,8 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
   },
 ];
 
-export function GuideDialog({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState(0);
+export function GuideDialog({ onClose, start }: { onClose: () => void; start?: string }) {
+  const [tab, setTab] = useState(() => Math.max(0, SECTIONS.findIndex((s) => s.title === start)));
   const titles = [...SECTIONS.map((s) => s.title), 'Keyboard shortcuts'];
   const section = SECTIONS[tab];
 

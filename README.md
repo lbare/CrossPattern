@@ -18,7 +18,8 @@ There is nothing to install and no account. Your patterns stay in your own brows
   back parts of the first conversion, or re-convert just one area with different settings.
 - **Colors**: any color you like, each with a chart symbol and a live stitch count. Highlight, lock, merge,
   reduce to a set number of colors, and preview on any fabric color.
-- **Stitch mode**: tick squares off as you stitch them and see your progress per color.
+- **Stitching**: a screen for working through the pattern color by color and section by section, ticking
+  stitches off as you go. Made for using on a phone next to your hoop.
 - **Projects**: keep as many patterns as you like in a library, and save any of them to a file.
 - **Export**: a PNG of the chart, or a multi-page printable chart (also saved as PDF) with a color key.
 
@@ -105,11 +106,30 @@ area has its own colors, a subject in shadow is not drowned out by a busy backgr
 
 ### Stitching
 
-Turn on **Stitch mode** and click or drag over squares as you finish them. They fade so that what is left
-stands out, the palette shows stitched and total counts per color, and overall progress is shown at the bottom
-of the panel. Shift-click ticks off a whole patch of one color. Progress is saved with the project.
+When the pattern is ready, press **Stitch ✓**. The stitch screen takes you through the pattern the way most
+people stitch: one color at a time, and one section of that color at a time.
 
-![Stitch mode with symbols: finished squares are faded and progress is counted](docs/stitch-mode.png)
+![The stitch screen: one color highlighted, finished stitches crossed out, and the current section outlined](docs/stitching.png)
+
+- **Pick a color** under Colors. The other colors fade out and only stitches of this color can be ticked
+  (untick "Only this color" to see and tick everything).
+- **Work section by section.** A section is one separate patch of the color. Sections are numbered from the top
+  down, the current one is outlined, and its starting column and row match a printed chart. Next and Prev move
+  between them, and **Section done** ticks a whole section and moves to the next unfinished one.
+- **Tick single stitches** by tapping or clicking them; again to untick. On a computer, drag across several or
+  Shift-click a whole section. Ticked stitches are faded and crossed out, and Undo takes back a tick.
+- **Finish a color** and Next color moves on to the next one with stitches left. Progress per color and for the
+  whole pattern is always showing.
+- **Pick up where you left off**: progress is saved as you tick, the color and section you were on are remembered
+  for each project, and if you leave the site on the stitch screen it opens there next time.
+
+It is built to be used on a phone next to your hoop: the pattern fills the top, the controls sit underneath in
+reach of a thumb, a tap ticks and a drag moves, the screen can be kept from going dark, and the back button
+returns to the editor.
+
+<img src="docs/stitching-phone.png" alt="The stitch screen on a phone" width="300">
+
+On a computer, ← and → move between sections and Enter ticks the current one off.
 
 ### Projects, saving and printing
 
@@ -133,9 +153,9 @@ Projects are stored in your browser's IndexedDB on your own computer. That means
 - Patterns can be up to 400 × 400 stitches.
 - Full stitches and backstitch only; no half or quarter stitches.
 - Colors are free RGB colors and are not matched to thread brands.
-- It is built for a mouse or trackpad. On a phone it opens ready for looking at a pattern: drag to move, pinch
-  to zoom, tap a stitch to see what it is, and tap to tick stitches off in Stitch mode. The drawing tools are
-  behind a Tools button. Drawing and picture conversion are better on a computer.
+- Drawing and picture conversion are built for a mouse or trackpad. On a phone the editor opens ready for looking
+  at a pattern (drag to move, pinch to zoom, tap a stitch to see what it is), with the drawing tools behind a
+  Tools button, and the stitch screen is made for phones.
 
 ## Running it yourself
 
@@ -174,6 +194,7 @@ It is a Vite + React + TypeScript app with no backend and no runtime dependencie
 | `src/convert.ts` | Picture conversion: sampling, shadow lifting, edge-preserving smoothing, cartoon areas, k-means color reduction. |
 | `src/marks.ts` | Working on a photo before conversion: shape detection, the smart brush, selections and areas. |
 | `src/ImportDialog.tsx` | The two-step picture conversion dialog. |
+| `src/StitchScreen.tsx`, `src/stitch.ts` | The stitch screen, and working through colors and sections. |
 | `src/PalettePanel.tsx` | The right-hand panel: guide picture, colors, simplify tools, progress. |
 | `src/extras.tsx`, `src/dialogs.tsx`, `src/guide.tsx` | Projects, re-convert, export, resize and the built-in guide. |
 | `src/print.ts` | The multi-page printable chart. |

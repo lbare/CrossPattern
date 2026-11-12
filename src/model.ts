@@ -424,3 +424,62 @@ export function deserialize(text: string): Pattern {
     reference, fabric, done,
   };
 }
+
+// ---- Sections, for stitching one patch at a time ------------------------
+
+/**
+ * Every square connected to `start` that has the same color, joined side by side and (with `corners`)
+ * corner to corner too, the way a run of stitches is worked.
+ */
+export function connectedCells(cells: Uint16Array, w: number, h: number, start: number, corners = true): number[] {
+  const color = cells[start], seen = new Uint8Array(cells.length), out = [start];
+  seen[start] = 1;
+  for (let k = 0; k < out.length; k++) {
+    const i = out[k], x = i % w, y = (i / w) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if ((!dx && !dy) || (!corners && dx && dy)) continue;
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      const j = yy * w + xx;
+      if (!seen[j] && cells[j] === color) { seen[j] = 1; out.push(j); }
+    }
+  }
+  return out;
+}
+
+export interface Section {
+  /** The squares in it. */
+  cells: number[];
+  /** Its bounding box, in squares. */
+  x: number; y: number; w: number; h: number;
+  /** How many of its squares are ticked off as stitched. */
+  done: number;
+}
+
+/**
+ * The separate patches of one color, in reading order (top to bottom, then left to right), with
+ * `at` giving each square's section number (or -1 for squares of other colors).
+ */
+export function colorSections(p: Pattern, color: number): { list: Section[]; at: Int32Array } {
+  const { width: w, height: h, cells } = p;
+  const at = new Int32Array(cells.length).fill(-1), list: Section[] = [];
+  for (let i = 0; i < cells.length; i++) {
+    if (cells[i] !== color || at[i] >= 0) continue;
+    const part = connectedCells(cells, w, h, i);
+    let x0 = w, y0 = h, x1 = 0, y1 = 0, done = 0;
+    for (const j of part) {
+      at[j] = 0;
+      const x = j % w, y = (j / w) | 0;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+      if (p.done?.[j]) done++;
+    }
+    list.push({ cells: part, x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, done });
+  }
+  // Found by scanning rows, so already top to bottom; sort so ties on the top row go left to right.
+  list.sort((a, b) => a.y - b.y || a.x - b.x);
+  list.forEach((s, k) => { for (const j of s.cells) at[j] = k; });
+  return { list, at };
+}
