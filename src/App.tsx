@@ -6,6 +6,8 @@ import { ExportDialog, NewDialog, ResizeDialog } from './dialogs';
 import { ProjectsDialog, ReconvertDialog } from './extras';
 import { GuideDialog } from './guide';
 import { StitchScreen } from './StitchScreen';
+import { ReceiveDialog, SendDialog } from './sendui';
+import { LINK_PREFIX } from './share';
 import {
   currentSection, isFinished, nextUnfinished, openStitch, sections, setSectionDone, startScreen, stepSection, syncScreen, undoFloor,
 } from './stitch';
@@ -132,7 +134,18 @@ export function App() {
     // The stitch screen lives at #stitch, so the phone's back button leaves it and a refresh stays on it.
     window.addEventListener('hashchange', syncScreen);
     window.addEventListener('popstate', syncScreen);
-    startScreen();
+    // A link from Send to another device: take the project out of the address (so a refresh does not
+    // ask again) and offer to open it. Otherwise carry on where the last visit ended.
+    const received = () => {
+      if (!location.hash.startsWith(LINK_PREFIX)) return false;
+      S.incoming = location.hash.slice(LINK_PREFIX.length);
+      history.replaceState(null, '', location.pathname + location.search);
+      syncScreen();
+      openDialog('receive');
+      return true;
+    };
+    if (!received()) startScreen();
+    window.addEventListener('hashchange', received);
     // On a phone the natural first thing is to look around, not to draw.
     if (window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 760) setTool('pan');
     // First visit: open the guide once so new people know where to start.
@@ -149,6 +162,7 @@ export function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('hashchange', syncScreen);
+      window.removeEventListener('hashchange', received);
       window.removeEventListener('popstate', syncScreen);
     };
   }, []);
@@ -161,6 +175,7 @@ export function App() {
       <>
         <StitchScreen />
         {dialog === 'help' && <GuideDialog start="Stitching" onClose={() => setDialog(null)} />}
+        {dialog === 'send' && <SendDialog onClose={() => setDialog(null)} />}
       </>
     );
   }
@@ -210,6 +225,7 @@ export function App() {
           <button className="btn" onClick={() => setDialog('new')}>New</button>
           <button className="btn" onClick={() => fileInput.current?.click()}>Open</button>
           <button className="btn" onClick={saveFile} title="Save a project file (⌘S)">Save</button>
+          <button className="btn" onClick={() => setDialog('send')} title="Open this project on your phone or another computer">Send</button>
           <input
             ref={fileInput}
             type="file"
@@ -305,6 +321,8 @@ export function App() {
       {dialog === 'projects' && <ProjectsDialog onClose={() => setDialog(null)} />}
       {dialog === 'reconvert' && <ReconvertDialog onClose={() => setDialog(null)} />}
       {dialog === 'help' && <GuideDialog onClose={() => setDialog(null)} />}
+      {dialog === 'send' && <SendDialog onClose={() => setDialog(null)} />}
+      {dialog === 'receive' && S.incoming && <ReceiveDialog text={S.incoming} onClose={() => { S.incoming = ''; setDialog(null); }} />}
       {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === 'resize' && <ResizeDialog onClose={() => setDialog(null)} />}
     </div>

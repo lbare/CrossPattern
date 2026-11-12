@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { clamp, inkFor } from './color';
+import { clamp, hexToRgb, inkFor, rgbToHex } from './color';
 import { currentSection, sectionCells, sections, tickable, ticked } from './stitch';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
@@ -239,17 +239,22 @@ export function CanvasView() {
       };
 
       if (S.stitchMode && p.done && scale >= 6) {
-        // Stitched squares get a small cross, so they read as done even next to faded-out colors.
-        const ink = inkFor(p.fabric ?? FABRIC) === '#000000' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.6)';
-        const m = scale * 0.28, cross = new Path2D();
+        // Stitched squares get a cross, in dark or light ink, whichever shows up on that color.
+        // Judged on the lighter shade a stitched square is drawn in, not on the color itself.
+        const [fr, fg, fb] = hexToRgb(p.fabric ?? FABRIC);
+        const shade = (hex: string) => { const [r, g, b] = hexToRgb(hex); return rgbToHex(r * 0.55 + fr * 0.45, g * 0.55 + fg * 0.45, b * 0.55 + fb * 0.45); };
+        const lightInk = new Set(p.palette.filter((c) => inkFor(shade(c.hex)) === '#ffffff').map((c) => c.id));
+        const m = scale * 0.24, dark = new Path2D(), light = new Path2D();
         for (let y = vy0; y < vy1; y++) for (let x = vx0; x < vx1; x++) {
           const i = y * p.width + x;
           if (!p.done[i] || !p.cells[i] || (S.highlight && p.cells[i] !== S.highlight)) continue;
+          const path = lightInk.has(p.cells[i]) ? light : dark;
           const l = x * scale + m, t = y * scale + m, r = (x + 1) * scale - m, b = (y + 1) * scale - m;
-          cross.moveTo(l, t); cross.lineTo(r, b); cross.moveTo(r, t); cross.lineTo(l, b);
+          path.moveTo(l, t); path.lineTo(r, b); path.moveTo(r, t); path.lineTo(l, b);
         }
-        ctx.lineWidth = Math.max(1, scale * 0.07); ctx.strokeStyle = ink; ctx.lineCap = 'round';
-        ctx.stroke(cross);
+        ctx.lineWidth = Math.max(1.2, scale * 0.08); ctx.lineCap = 'round';
+        ctx.strokeStyle = 'rgba(20,18,16,0.6)'; ctx.stroke(dark);
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.stroke(light);
         ctx.lineCap = 'butt';
       }
 

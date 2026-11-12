@@ -40,9 +40,10 @@ export function StitchScreen() {
   const sectionsDone = list.filter(isFinished).length;
 
   // On a phone the lists open as a sheet over the pattern; on a computer they are always showing.
-  const [sheet, setSheet] = useState<'colors' | 'sections' | null>(null);
+  const [sheet, setSheet] = useState<'colors' | 'sections' | 'options' | null>(null);
   const [tab, setTab] = useState<'colors' | 'sections'>('colors');
-  const showing = sheet ?? tab;
+  const showing = sheet === 'options' ? tab : sheet ?? tab;
+  const toggleSheet = (s: 'colors' | 'sections' | 'options') => { if (s !== 'options') setTab(s); setSheet(sheet === s ? null : s); };
   const [awake, setAwake] = useState(() => { try { return localStorage.getItem('crosspattern.awake') !== '0'; } catch { return true; } });
   useEffect(() => {
     keepAwake(awake);
@@ -51,6 +52,18 @@ export function StitchScreen() {
   }, [awake]);
 
   const pickColor = (id: number) => { focusColor(id); setSheet(null); };
+  const toggles = (
+    <div className="toggles">
+      <label className="check" title="Fade out the other colors, and only tick stitches of this color">
+        <input type="checkbox" checked={S.onlyFocus} onChange={(e) => setOnlyFocus(e.target.checked)} /> Only this color
+      </label>
+      {canKeepAwake() && (
+        <label className="check" title="Stop the screen going dark while you stitch">
+          <input type="checkbox" checked={awake} onChange={(e) => setAwake(e.target.checked)} /> Keep screen on
+        </label>
+      )}
+    </div>
+  );
   const pickSection = (n: number) => { goSection(n); setSheet(null); };
   const session = Math.max(0, all.done - sessionStart);
 
@@ -125,8 +138,10 @@ export function StitchScreen() {
         </div>
         <div className="group options">
           <button className={'btn' + (S.showSymbols ? ' on' : '')} title="Show each color's chart symbol in its squares" onClick={() => setStitchSymbols(!S.showSymbols)}>Symbols</button>
+          <button className="btn" onClick={() => openDialog('send')} title="Open this project, with its progress, on another device">Send</button>
           <button className="btn help-btn" onClick={() => openDialog('help')} title="How this works">Help</button>
         </div>
+        <button className={'btn icon phone-only' + (sheet === 'options' ? ' on' : '')} onClick={() => toggleSheet('options')} title="More" aria-label="More">⋯</button>
       </header>
 
       <div className="stitch-main">
@@ -189,16 +204,7 @@ export function StitchScreen() {
               </>
             )}
 
-            <div className="toggles">
-              <label className="check" title="Fade out the other colors, and only tick stitches of this color">
-                <input type="checkbox" checked={S.onlyFocus} onChange={(e) => setOnlyFocus(e.target.checked)} /> Only this color
-              </label>
-              {canKeepAwake() && (
-                <label className="check" title="Stop the screen going dark while you stitch">
-                  <input type="checkbox" checked={awake} onChange={(e) => setAwake(e.target.checked)} /> Keep screen on
-                </label>
-              )}
-            </div>
+            {toggles}
 
             <div className="tabs">
               <button className={showing === 'colors' ? 'on' : ''} onClick={() => { setTab('colors'); setSheet(sheet === 'colors' ? null : 'colors'); }}>
@@ -210,7 +216,53 @@ export function StitchScreen() {
             </div>
           </section>
 
-          <section className="lists">{showing === 'colors' ? colorList : sectionList}</section>
+          <section className="lists">
+            {sheet === 'options' ? (
+              <div className="options-sheet">
+                {toggles}
+                <div className="row">
+                  <button className={'btn' + (S.showSymbols ? ' on' : '')} onClick={() => setStitchSymbols(!S.showSymbols)}>Symbols</button>
+                  <button className="btn" onClick={() => { fitView(); setSheet(null); }}>Whole pattern</button>
+                  <button className="btn" onClick={() => { setSheet(null); openDialog('send'); }}>Send to another device</button>
+                  <button className="btn" onClick={() => { setSheet(null); openDialog('help'); }}>Help</button>
+                </div>
+              </div>
+            ) : showing === 'colors' ? colorList : sectionList}
+          </section>
+
+          {/* Phone: one slim bar. The color opens the colors, the section opens the sections. */}
+          <nav className="phonebar" aria-label="Stitching">
+            {color && (
+              <button className="pb-color" onClick={() => toggleSheet('colors')} aria-label="Choose a color">
+                <Chip c={color} />
+                <span className="pb-pct">{pct(mine.done, mine.total)}%</span>
+              </button>
+            )}
+            {colorDone ? (
+              <>
+                <span className="pb-what">{following ? 'This color is done' : 'All stitched!'}</span>
+                {following > 0 && <button className="btn primary" onClick={() => focusColor(following)}>Next color →</button>}
+              </>
+            ) : (
+              <>
+                <button className="btn icon" onClick={() => stepSection(-1)} aria-label="Previous section">‹</button>
+                <button className="pb-what" onClick={() => toggleSheet('sections')}>
+                  <b>{sec ? `Section ${k + 1}/${list.length}` : `${list.length} sections`}</b>
+                  {sec && <span>{sec.done}/{sec.cells.length} stitched</span>}
+                </button>
+                <button className="btn icon" onClick={() => (sec && !isFinished(sec) ? stepSection(1) : nextUnfinished() || stepSection(1))} aria-label="Next section">›</button>
+                {sec && (
+                  <button
+                    className={'btn pb-done' + (isFinished(sec) ? '' : ' primary')}
+                    onClick={() => { if (isFinished(sec)) setSectionDone(k, false); else { setSectionDone(k, true); nextUnfinished(); } }}
+                    aria-label={isFinished(sec) ? 'Untick section' : 'Section done'}
+                  >
+                    {isFinished(sec) ? '↺' : '✓'}
+                  </button>
+                )}
+              </>
+            )}
+          </nav>
         </aside>
       </div>
 

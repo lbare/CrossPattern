@@ -20,7 +20,8 @@ There is nothing to install and no account. Your patterns stay in your own brows
   reduce to a set number of colors, and preview on any fabric color.
 - **Stitching**: a screen for working through the pattern color by color and section by section, ticking
   stitches off as you go. Made for using on a phone next to your hoop.
-- **Projects**: keep as many patterns as you like in a library, and save any of them to a file.
+- **Projects**: keep as many patterns as you like in a library, save any of them to a file, or send one to
+  your phone with a QR code.
 - **Export**: a PNG of the chart, or a multi-page printable chart (also saved as PDF) with a color key.
 
 The same guide is built into the site: press **Guide** in the top bar, or `?`.
@@ -123,9 +124,11 @@ people stitch: one color at a time, and one section of that color at a time.
 - **Pick up where you left off**: progress is saved as you tick, the color and section you were on are remembered
   for each project, and if you leave the site on the stitch screen it opens there next time.
 
-It is built to be used on a phone next to your hoop: the pattern fills the top, the controls sit underneath in
-reach of a thumb, a tap ticks and a drag moves, the screen can be kept from going dark, and the back button
-returns to the editor.
+It is built to be used on a phone next to your hoop. The pattern fills the screen with one slim bar underneath:
+the color (tap to change it), ‹ and › for the sections, the section number (tap for the list) and ✓ to tick the
+section off. Everything else is in the ⋯ menu. A tap ticks, a drag moves, the screen can be kept from going
+dark, and the back button returns to the editor. Ticked stitches keep a lighter shade of their color, with a
+cross over them.
 
 <img src="docs/stitching-phone.png" alt="The stitch screen on a phone" width="300">
 
@@ -140,12 +143,26 @@ On a computer, ← and → move between sections and Enter ticks the current one
 - **Export** makes a PNG. "Print or save as PDF" in the same dialog lays the chart across pages with symbols,
   row and column numbers, and a cover page with the color key and finished sizes.
 
+### On another device
+
+To work on a project on your phone (or another computer, or another browser), press **Send** in the editor or
+in the stitch screen's ⋯ menu. You get a QR code and a link: scan the code with the phone's camera, or copy or
+share the link to yourself, and open it. The project appears on that device with its progress, and can go
+straight to the stitch screen.
+
+- **Nothing is uploaded.** The whole project travels inside the link, after the `#`, which browsers never send
+  to the website. The guide photo stays behind to keep links short.
+- **Each link is a copy, not a live connection.** To bring your stitching progress back, send the project from
+  the phone the same way and choose **Update my copy**: the pattern comes from the link, and every stitch ticked
+  on either device is kept (unless that square has since been recolored). **Keep both** makes a separate copy.
+- Very large, detailed patterns can be too long for a QR code; Copy link and Share still work for those.
+
 ## Where your data lives
 
 Projects are stored in your browser's IndexedDB on your own computer. That means:
 
 - Nothing is sent to a server, and nobody else can see your patterns.
-- Projects do not follow you to another browser or device. Use Save and Open to move them.
+- Projects do not move to another browser or device by themselves. Use Send (or Save and Open) to move them.
 - Clearing your browser's site data deletes the library. Keep project files of anything you care about.
 
 ## Limits
@@ -198,6 +215,7 @@ It is a Vite + React + TypeScript app with no backend and no runtime dependencie
 | `src/PalettePanel.tsx` | The right-hand panel: guide picture, colors, simplify tools, progress. |
 | `src/extras.tsx`, `src/dialogs.tsx`, `src/guide.tsx` | Projects, re-convert, export, resize and the built-in guide. |
 | `src/print.ts` | The multi-page printable chart. |
+| `src/share.ts`, `src/sendui.tsx` | Sending a project to another device as a link and QR code. |
 | `src/db.ts` | The IndexedDB project library and saved conversions. |
 | `src/*.test.ts` | Automated tests. |
 

@@ -45,6 +45,8 @@ export const S = {
   dialog: null as string | null,
   /** A picture dropped onto the window, waiting to be converted. */
   droppedFile: null as File | null,
+  /** A project arriving from another device: the packed text from the link, waiting to be opened. */
+  incoming: '',
   tool: 'pencil' as Tool,
   colorId: initial.palette[0]?.id ?? 0,
   brush: 1,
@@ -719,6 +721,25 @@ export async function openAsNewProject(p: Pattern): Promise<void> {
   if (isBlank()) return setPattern(p);
   await autosave();
   activate(newId(), p);
+}
+
+/**
+ * Takes in a project that arrived by link from another device. With `asCopy` it becomes a new project;
+ * otherwise it goes in as the same project, updating the copy here if there is one (see mergeProgress).
+ */
+export async function receiveProject(id: string, incoming: Pattern, merge: (incoming: Pattern, here: Pattern) => Pattern, asCopy: boolean): Promise<void> {
+  if (asCopy || !id) { await openAsNewProject({ ...incoming, name: incoming.name + (asCopy ? ' (copy)' : '') }); return; }
+  await autosave();
+  const rec = await getProject(id).catch(() => undefined);
+  const here = id === S.projectId ? S.pattern : rec ? deserialize(rec.data) : null;
+  activate(id, here ? merge(incoming, here) : incoming);
+  unsaved = true;
+  await autosave();
+}
+
+/** Whether a project is already in the library here. */
+export async function hasProject(id: string): Promise<boolean> {
+  return id === S.projectId || !!(await getProject(id).catch(() => undefined));
 }
 
 export async function switchProject(id: string): Promise<void> {

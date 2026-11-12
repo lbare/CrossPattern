@@ -20,8 +20,9 @@ export function buildCellImage(p: Pattern, highlight: number, target?: HTMLCanva
   for (const col of p.palette) {
     const [r, g, b] = hexToRgb(col.hex);
     lut.set(col.id, highlight && col.id !== highlight ? toward(r, g, b, 0.85) : pack(r, g, b));
-    // Stitched squares fade into the fabric so what is left to do stands out.
-    faded.set(col.id, toward(r, g, b, 0.78));
+    // Stitched squares go a lighter shade of their own color: what is left to do stands out, but each
+    // stitched square still shows which color it is.
+    faded.set(col.id, toward(r, g, b, 0.45));
   }
   const done = fadeDone ? p.done : undefined;
   for (let i = 0; i < out.length; i++) {
@@ -59,7 +60,9 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, p: Pattern, scale: nu
         if (!v) continue;
         const c = info.get(v);
         if (!c) continue;
-        ctx.fillStyle = (o.highlight && v !== o.highlight) || (o.dimDone && p.done?.[y * p.width + x]) ? '#b8b4ac' : c.ink;
+        // A stitched square shows a cross instead of its symbol (drawn by the stitch screen).
+        if (o.dimDone && p.done?.[y * p.width + x]) continue;
+        ctx.fillStyle = o.highlight && v !== o.highlight ? '#b8b4ac' : c.ink;
         ctx.fillText(c.symbol, (x + 0.5) * scale, (y + 0.54) * scale);
       }
     }
