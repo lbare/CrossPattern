@@ -162,8 +162,9 @@ export function areaTint(label: number): [number, number, number] {
 /**
  * Draws the photo with its marks: removed parts as a checkerboard and each area in its own tint.
  * With `shapes`, the outlines of the detected shapes are drawn faintly and the one under the cursor is lit up.
+ * With `sel`, the current selection is washed blue with a white edge.
  */
-export function compose(base: Base, m: LabelMap, out: ImageData, shapes?: Shapes | null, hover = -1): void {
+export function compose(base: Base, m: LabelMap, out: ImageData, shapes?: Shapes | null, hover = -1, sel?: Uint8Array | null): void {
   const src = base.image.data, dst = out.data, n = m.w * m.h;
   const tints = new Map<number, [number, number, number]>();
   for (let i = 0; i < n; i++) {
@@ -183,11 +184,18 @@ export function compose(base: Base, m: LabelMap, out: ImageData, shapes?: Shapes
       if (shapes.id[i] === hover) { r = r * 0.6 + 102; g = g * 0.6 + 102; b = b * 0.6 + 102; }
       else if (shapes.edge[i] && l !== REMOVE) { r = r * 0.7 + 76; g = g * 0.7 + 76; b = b * 0.7 + 76; }
     }
+    if (sel && sel[i]) {
+      // The current selection: a blue wash, with a bright line where it ends.
+      const x = i % m.w;
+      const rim = (x > 0 && !sel[i - 1]) || (x < m.w - 1 && !sel[i + 1]) || (i >= m.w && !sel[i - m.w]) || (i < n - m.w && !sel[i + m.w]);
+      if (rim) { r = 255; g = 255; b = 255; }
+      else { r = r * 0.55 + 20; g = g * 0.55 + 70; b = b * 0.55 + 115; }
+    }
     dst[o] = r; dst[o + 1] = g; dst[o + 2] = b; dst[o + 3] = 255;
   }
 }
 
-// ---- Edge snapping ------------------------------------------------------
+// ---- Softened colors ----------------------------------------------------
 
 const softCache = new WeakMap<Base, { L: Float32Array; A: Float32Array; B: Float32Array }>();
 
@@ -212,74 +220,6 @@ function softened(base: Base, w: number, h: number) {
   s = { L: blur(base.L), A: blur(base.A), B: blur(base.B) };
   softCache.set(base, s);
   return s;
-}
-
-/**
- * A brush stroke that snaps to the edges of what it is painted on. The middle of the stroke says which
- * colors are wanted; the mark then spreads outward through similar colors until it meets an edge (up to
- * about a brush-width beyond the stroke), and pulls back from anything the brush overshot onto.
- */
-export function snapStroke(m: LabelMap, base: Base, path: [number, number][], r: number, tol: number, label: number): void {
-  const { w, h } = m, n = w * h;
-  const soft = softened(base, w, h);
-  const mask = (radius: number) => {
-    const t: LabelMap = { w, h, data: new Uint8Array(n) };
-    stamp(t, path[0][0], path[0][1], radius, 1);
-    for (let i = 1; i < path.length; i++) stampLine(t, path[i - 1][0], path[i - 1][1], path[i][0], path[i][1], radius, 1);
-    return t.data;
-  };
-  const core = mask(Math.max(1.5, r * 0.45)), reach = mask(r * 2 + 2);
-
-  // The few colors that make up what is under the middle of the stroke.
-  const samples: number[] = [];
-  for (let i = 0; i < n; i++) if (core[i]) samples.push(i);
-  if (!samples.length) return;
-  const step = Math.max(1, Math.floor(samples.length / 1500));
-  const pts = samples.filter((_, k) => k % step === 0);
-  const K = Math.min(4, pts.length);
-  const cL = new Float64Array(K), cA = new Float64Array(K), cB = new Float64Array(K);
-  const d2 = (i: number, c: number) => (soft.L[i] - cL[c]) ** 2 + (soft.A[i] - cA[c]) ** 2 + (soft.B[i] - cB[c]) ** 2;
-  const near = (i: number) => { let b = Infinity; for (let c = 0; c < K; c++) b = Math.min(b, d2(i, c)); return b; };
-  // Start the groups far apart, then settle them.
-  let pick = pts[0];
-  for (let c = 0; c < K; c++) {
-    cL[c] = soft.L[pick]; cA[c] = soft.A[pick]; cB[c] = soft.B[pick];
-    let far = -1;
-    for (const i of pts) { let b = Infinity; for (let k = 0; k <= c; k++) b = Math.min(b, d2(i, k)); if (b > far) { far = b; pick = i; } }
-  }
-  for (let iter = 0; iter < 5; iter++) {
-    const sum = new Float64Array(K * 4);
-    for (const i of pts) {
-      let best = 0, bd = Infinity;
-      for (let c = 0; c < K; c++) { const d = d2(i, c); if (d < bd) { bd = d; best = c; } }
-      sum[best * 4] += soft.L[i]; sum[best * 4 + 1] += soft.A[i]; sum[best * 4 + 2] += soft.B[i]; sum[best * 4 + 3]++;
-    }
-    for (let c = 0; c < K; c++) if (sum[c * 4 + 3]) { cL[c] = sum[c * 4] / sum[c * 4 + 3]; cA[c] = sum[c * 4 + 1] / sum[c * 4 + 3]; cB[c] = sum[c * 4 + 2] / sum[c * 4 + 3]; }
-  }
-
-  // Spread from the middle of the stroke through similar colors, staying within reach of the brush.
-  const t2 = tol * tol, sel = new Uint8Array(n), stack: number[] = [];
-  for (const i of samples) { sel[i] = 1; stack.push(i); }
-  while (stack.length) {
-    const i = stack.pop()!, x = i % w;
-    const visit = (j: number) => { if (!sel[j] && reach[j] && near(j) <= t2) { sel[j] = 1; stack.push(j); } };
-    if (x > 0) visit(i - 1);
-    if (x < w - 1) visit(i + 1);
-    if (i >= w) visit(i - w);
-    if (i < n - w) visit(i + w);
-  }
-  // Fill pinholes left by odd-colored specks, so the mark is solid.
-  for (let pass = 0; pass < 2; pass++) {
-    const add: number[] = [];
-    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x;
-      if (sel[i] || !reach[i]) continue;
-      const c = sel[i - 1] + sel[i + 1] + sel[i - w] + sel[i + w] + sel[i - w - 1] + sel[i - w + 1] + sel[i + w - 1] + sel[i + w + 1];
-      if (c >= 5) add.push(i);
-    }
-    for (const i of add) sel[i] = 1;
-  }
-  for (let i = 0; i < n; i++) if (sel[i]) m.data[i] = label;
 }
 
 // ---- Shape detection ----------------------------------------------------
@@ -371,4 +311,141 @@ export function fillHoles(m: LabelMap, label: number, maxSize: number): void {
     }
     if (enclosed && patch.length <= maxSize) for (const i of patch) data[i] = label;
   }
+}
+
+// ---- Selections ---------------------------------------------------------
+// A selection is a mask the size of the label map: 1 for every selected pixel.
+
+/** The pixels of the shape under a point, as a mask. */
+export function shapeMask(shapes: Shapes, w: number, h: number, x: number, y: number): Uint8Array {
+  const ix = Math.min(w - 1, Math.max(0, Math.floor(x))), iy = Math.min(h - 1, Math.max(0, Math.floor(y)));
+  const target = shapes.id[iy * w + ix], out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) if (shapes.id[i] === target) out[i] = 1;
+  return out;
+}
+
+/** Everything inside a hand-drawn outline, as a mask. */
+export function polygonMask(w: number, h: number, pts: [number, number][]): Uint8Array {
+  const t: LabelMap = { w, h, data: new Uint8Array(w * h) };
+  fillPolygon(t, pts, 1);
+  return t.data;
+}
+
+/** Adds `hit` to a selection, or takes it away. */
+export function combine(sel: Uint8Array, hit: Uint8Array, subtract: boolean): void {
+  for (let i = 0; i < sel.length; i++) if (hit[i]) sel[i] = subtract ? 0 : 1;
+}
+
+/** Grows a selection by `px` pixels all round (or shrinks it, for a negative number). */
+export function growMask(sel: Uint8Array, w: number, h: number, px: number): void {
+  const want = px > 0 ? 1 : 0;
+  for (let step = 0; step < Math.abs(px); step++) {
+    const src = sel.slice();
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (src[i] === want) continue;
+      if ((x > 0 && src[i - 1] === want) || (x < w - 1 && src[i + 1] === want) || (y > 0 && src[i - w] === want) || (y < h - 1 && src[i + w] === want)) sel[i] = want;
+    }
+  }
+}
+
+/**
+ * Rounds off a selection's edge: ragged bits are trimmed, notches filled and specks dropped.
+ * Each pixel ends up selected if most of the pixels within `radius` of it are.
+ */
+export function smoothMask(sel: Uint8Array, w: number, h: number, radius: number): void {
+  const n = w * h, tmp = new Float32Array(n), acc = new Float32Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0, c = 0;
+    for (let d = -radius; d <= radius; d++) { const xx = x + d; if (xx >= 0 && xx < w) { s += sel[y * w + xx]; c++; } }
+    tmp[y * w + x] = s / c;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0, c = 0;
+    for (let d = -radius; d <= radius; d++) { const yy = y + d; if (yy >= 0 && yy < h) { s += tmp[yy * w + x]; c++; } }
+    acc[y * w + x] = s / c;
+  }
+  for (let i = 0; i < n; i++) sel[i] = acc[i] >= 0.5 ? 1 : 0;
+}
+
+/** Closes pinholes in a selection: unselected patches smaller than `maxSize` that it completely surrounds. */
+export function closeHoles(sel: Uint8Array, w: number, h: number, maxSize: number): void {
+  const m: LabelMap = { w, h, data: sel };
+  fillHoles(m, 1, maxSize);
+}
+
+// ---- The smart brush ----------------------------------------------------
+
+interface Pieces { index: Int32Array; count: Int32Array; L: Float32Array; A: Float32Array; B: Float32Array }
+const piecesCache = new WeakMap<Shapes, Pieces>();
+
+/** The small pieces a fine split of the photo is made of, with the size and average color of each. */
+function piecesOf(fine: Shapes, base: Base): Pieces {
+  let p = piecesCache.get(fine);
+  if (p) return p;
+  const n = fine.id.length, index = new Int32Array(n), seen = new Map<number, number>();
+  for (let i = 0; i < n; i++) {
+    let k = seen.get(fine.id[i]);
+    if (k === undefined) { k = seen.size; seen.set(fine.id[i], k); }
+    index[i] = k;
+  }
+  const K = seen.size, count = new Int32Array(K), L = new Float32Array(K), A = new Float32Array(K), B = new Float32Array(K);
+  for (let i = 0; i < n; i++) { const k = index[i]; count[k]++; L[k] += base.L[i]; A[k] += base.A[i]; B[k] += base.B[i]; }
+  for (let k = 0; k < K; k++) { L[k] /= count[k]; A[k] /= count[k]; B[k] /= count[k]; }
+  p = { index, count, L, A, B };
+  piecesCache.set(fine, p);
+  return p;
+}
+
+/**
+ * A brush stroke that follows the picture. The photo is already split into small pieces whose borders
+ * lie on its real edges (`fine`). The stroke takes every piece its middle runs over, then spreads to
+ * neighbouring pieces of a similar color that lie mostly within reach of the brush. Because whole pieces
+ * are taken, the result ends exactly on the photo's edges instead of somewhere near them.
+ * Returns the pixels the stroke selects.
+ */
+export function smartStroke(base: Base, fine: Shapes, w: number, h: number, path: [number, number][], r: number, tol: number): Uint8Array {
+  const n = w * h, P = piecesOf(fine, base), K = P.count.length;
+  const mask = (radius: number) => {
+    const t: LabelMap = { w, h, data: new Uint8Array(n) };
+    stamp(t, path[0][0], path[0][1], radius, 1);
+    for (let i = 1; i < path.length; i++) stampLine(t, path[i - 1][0], path[i - 1][1], path[i][0], path[i][1], radius, 1);
+    return t.data;
+  };
+  const core = mask(Math.max(1.5, r * 0.5)), reach = mask(r * 2.5 + 2);
+  const inCore = new Int32Array(K), inReach = new Int32Array(K);
+  for (let i = 0; i < n; i++) { if (core[i]) inCore[P.index[i]]++; if (reach[i]) inReach[P.index[i]]++; }
+
+  // Pieces the middle of the stroke clearly runs over are wanted for certain.
+  const seeds: number[] = [];
+  for (let k = 0; k < K; k++) if (inCore[k] >= Math.min(6, P.count[k] * 0.5)) seeds.push(k);
+  const out = new Uint8Array(n);
+  if (!seeds.length) { for (let i = 0; i < n; i++) out[i] = core[i]; return out; }
+
+  // A neighbouring piece joins in when it looks like one of them and is mostly within reach.
+  const t2 = tol * tol, wanted = new Uint8Array(K);
+  for (const k of seeds) wanted[k] = 1;
+  for (let k = 0; k < K; k++) {
+    if (wanted[k] || inReach[k] < P.count[k] * 0.3) continue;
+    for (const s of seeds) {
+      if ((P.L[k] - P.L[s]) ** 2 + (P.A[k] - P.A[s]) ** 2 + (P.B[k] - P.B[s]) ** 2 <= t2) { wanted[k] = 2; break; }
+    }
+  }
+  // Spread from the stroke through wanted pieces only, so nothing unconnected is picked up. Pieces the
+  // stroke ran over are taken whole, right up to their edges; the others only as far as the brush reaches.
+  const stack: number[] = [];
+  for (let i = 0; i < n; i++) if (core[i] && wanted[P.index[i]]) { out[i] = 1; stack.push(i); }
+  while (stack.length) {
+    const i = stack.pop()!, x = i % w;
+    const visit = (j: number) => {
+      const k = wanted[P.index[j]];
+      if (!out[j] && k && (k === 1 ? inReach[P.index[j]] >= P.count[P.index[j]] * 0.6 || reach[j] : reach[j])) { out[j] = 1; stack.push(j); }
+    };
+    if (x > 0) visit(i - 1);
+    if (x < w - 1) visit(i + 1);
+    if (i >= w) visit(i - w);
+    if (i < n - w) visit(i + w);
+  }
+  closeHoles(out, w, h, Math.max(20, Math.round(r * r)));
+  return out;
 }

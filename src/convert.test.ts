@@ -3,7 +3,7 @@ import { hexToOklab, hexToRgb, rgbToOklab } from './color';
 import { Sampled, quantize } from './convert';
 import {
   Base, CARTOON0, FLAT0, LabelMap, NONE, REMOVE, areaIds, fillHoles, fillShape, findShapes, fillUnmarked, makeLabels,
-  nextCartoonId, remapLabels, snapStroke, stamp, stampLine,
+  combine, growMask, nextCartoonId, remapLabels, shapeMask, smartStroke, smoothMask, stamp, stampLine,
 } from './marks';
 
 /** A sampled picture from rows of letters, each letter a color. '.' is transparent. */
@@ -81,6 +81,15 @@ describe('quantize', () => {
     it('keeps full detail when the area is set to it', () => {
       const r = quantize(sampled(rows, labels), { ...opts, colors: 6, areaTones: { [A]: 0 } });
       expect(new Set(rows.flatMap((_, y) => [0, 1, 2].map((x) => r.cells[y * 6 + x]))).size).toBeGreaterThan(1);
+    });
+    it('feathers an edge using only the colors on either side, with no outline', () => {
+      const wide = ['rrrrgggg', 'rrrrgggg', 'rrrrgggg', 'rrrrgggg'];
+      const marks = wide.map((row) => [...row].map((_, x) => (x < 4 ? A : NONE)));
+      const hard = quantize(sampled(wide, marks), { ...opts, colors: 1, outline: true, areaTones: { [A]: 1 } });
+      const soft = quantize(sampled(wide, marks), { ...opts, colors: 1, outline: true, areaTones: { [A]: 1 }, areaFeather: { [A]: 2 } });
+      expect(hard.palette).toHaveLength(3); // red, green and the outline
+      expect(soft.palette).toHaveLength(2); // no outline when the edge is soft
+      expect([...soft.cells].every((v) => v > 0)).toBe(true);
     });
     it('draws a dark outline where an area meets something else', () => {
       const r = quantize(sampled(rows, labels), { ...opts, outline: true, areaTones: { [A]: 1 } });
@@ -172,13 +181,41 @@ describe('marking tools', () => {
     expect(m.data[15 * 40 + 2]).toBe(9);
     expect(m.data[15 * 40 + 30]).toBe(NONE);
   });
-  it('snaps a brush stroke to the edge it runs along', () => {
-    const base = halves(), m = blank();
+  it('follows the edge with the smart brush', () => {
+    const base = halves(), fine = findShapes(base, 40, 30, 2);
     // A stroke just left of the boundary, with a brush wide enough to spill over it.
-    snapStroke(m, base, [[16, 5], [16, 25]], 5, 0.09, 9);
-    expect(m.data[15 * 40 + 16]).toBe(9);
-    expect(m.data[15 * 40 + 18]).toBe(9);  // spreads up to the edge
-    expect(m.data[15 * 40 + 22]).toBe(NONE); // and stops there
-    expect(m.data[15 * 40 + 1]).toBe(NONE);  // without running away across the picture
+    const hit = smartStroke(base, fine, 40, 30, [[16, 5], [16, 25]], 4, 0.09);
+    expect(hit[15 * 40 + 16]).toBe(1);
+    expect(hit[15 * 40 + 19]).toBe(1); // reaches the edge
+    expect(hit[15 * 40 + 21]).toBe(0); // and stops there
+  });
+  it('adds to and subtracts from a selection', () => {
+    const base = halves(), shapes = findShapes(base, 40, 30, 5), sel = new Uint8Array(40 * 30);
+    combine(sel, shapeMask(shapes, 40, 30, 5, 15), false);
+    expect(sel[15 * 40 + 5]).toBe(1);
+    expect(sel[15 * 40 + 30]).toBe(0);
+    combine(sel, shapeMask(shapes, 40, 30, 30, 15), false);
+    expect(sel[15 * 40 + 30]).toBe(1);
+    combine(sel, shapeMask(shapes, 40, 30, 5, 15), true);
+    expect(sel[15 * 40 + 5]).toBe(0);
+    expect(sel[15 * 40 + 30]).toBe(1);
+  });
+  it('grows and shrinks a selection', () => {
+    const sel = new Uint8Array(100);
+    sel[5 * 10 + 5] = 1;
+    growMask(sel, 10, 10, 1);
+    expect(sel.reduce((a, v) => a + v, 0)).toBe(5);
+    growMask(sel, 10, 10, -1);
+    expect(sel.reduce((a, v) => a + v, 0)).toBe(1);
+  });
+  it('smooths a ragged selection edge', () => {
+    const sel = new Uint8Array(20 * 20);
+    for (let y = 5; y < 15; y++) for (let x = 5; x < 15; x++) sel[y * 20 + x] = 1;
+    sel[10 * 20 + 16] = 1; // a spike sticking out
+    sel[10 * 20 + 10] = 0; // a pinhole
+    smoothMask(sel, 20, 20, 2);
+    expect(sel[10 * 20 + 16]).toBe(0);
+    expect(sel[10 * 20 + 10]).toBe(1);
+    expect(sel[10 * 20 + 8]).toBe(1);
   });
 });

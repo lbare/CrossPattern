@@ -418,3 +418,10 @@ button { touch-action: manipulation; }
 /* A dialog never grows wider than the screen, whatever is inside it. */
 .overlay { grid-template-columns: minmax(0, 1fr); justify-items: center; }
 .modal { min-width: 0; }
+
+/* Areas list: a summary line per area, with its settings on a second line when opened. */
+.arealist li { flex-direction: column; align-items: stretch; gap: 5px; padding: 4px 4px 4px 6px; }
+.arealist .line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.arealist .line select { flex: 1; min-width: 0; max-width: none; }
+.arealist .muted { font-size: 11px; }
+.controls .seg + .seg { margin-top: -4px; }

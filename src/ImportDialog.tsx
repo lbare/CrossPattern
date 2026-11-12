@@ -4,8 +4,9 @@ import { quantize, resultToImageData, sampleImage } from './convert';
 import { Modal } from './dialogs';
 import { ConversionRecord, DRAFT, deleteConversion, getConversion, putConversion } from './db';
 import {
-  Base, CARTOON0, Crop, FLAT0, LabelMap, NONE, REMOVE, Shapes, areaIds, areaTint, compose, fillPolygon, fillShape,
-  fillUnmarked, findShapes, makeBase, makeLabels, nextCartoonId, remapLabels, snapStroke, stamp, stampLine,
+  Base, CARTOON0, Crop, FLAT0, LabelMap, NONE, REMOVE, Shapes, areaIds, areaTint, closeHoles, combine, compose,
+  fillHoles, fillUnmarked, findShapes, growMask, makeBase, makeLabels, nextCartoonId, polygonMask, remapLabels,
+  shapeMask, smartStroke, smoothMask, stamp, stampLine,
 } from './marks';
 import { MAX_SIZE, paletteFromHexes } from './model';
 import { FABRIC } from './render';
@@ -116,33 +117,32 @@ function CropBox(props: { img: HTMLImageElement; crop: Crop; aspect: number; onC
   );
 }
 
-// ---- Step 2: mark areas -------------------------------------------------
+// ---- Step 2: select things and say what they are -------------------------
 
-type Mode = 'area' | 'remove' | 'erase';
 type MarkTool = 'shapes' | 'brush' | 'lasso';
-
-const MODE_HELP: Record<Mode, string> = {
-  area: 'An area is one thing in the picture: the cat, a leaf, the pot. Each area gets colors of its own, and you choose how much detail it keeps.',
-  remove: 'Left as empty fabric. Use for the background so the subject keeps a clean outline.',
-  erase: 'Clears marks, returning that part to normal conversion.',
-};
 
 interface View { z: number; x: number; y: number }
 
+/**
+ * The photo, with the marks made so far and the current selection drawn over it. Every tool here
+ * changes the selection only (adding to it, or taking away); turning a selection into an area or a
+ * removed part is done with the buttons beside it.
+ */
 function MarkCanvas(props: {
-  base: Base; labels: LabelMap; shapes: Shapes | null; target: number; tool: MarkTool; brush: number; tol: number;
-  snap: boolean; version: number; onBefore: () => void; onChange: () => void;
+  base: Base; labels: LabelMap; sel: Uint8Array; shapes: Shapes | null; fine: Shapes | null; tool: MarkTool;
+  subtract: boolean; brush: number; tol: number; version: number; onBefore: () => void; onChange: () => void;
 }) {
-  const { base, labels, shapes, target, tool, brush } = props;
+  const { base, labels, sel, shapes, fine, tool, brush } = props;
+  const { w: W, h: H } = labels;
   const ref = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ z: 1, x: 0, y: 0 });
   const st = useRef({
-    drawing: false, lx: 0, ly: 0, pts: [] as [number, number][], hover: null as [number, number] | null,
-    out: null as ImageData | null, pan: null as { sx: number; sy: number; x: number; y: number } | null,
-    // For a snapping stroke: where the brush has been, and the marks as they were before it began.
+    drawing: false, sub: false, lx: 0, ly: 0, pts: [] as [number, number][], hover: null as [number, number] | null,
+    out: null as ImageData | null, pan: null as { sx: number; sy: number; x: number; y: number } | null, space: false,
+    // For a brush stroke: where the brush has been, and the selection as it was before the stroke began.
     path: [] as [number, number][], before: null as Uint8Array | null,
-    // For the shapes tool: the shape under the cursor and the last one marked in this drag.
+    // For the shapes tool: the shape under the cursor, the last one taken in this drag, and where the cursor entered.
     hoverShape: -1, lastShape: -1, entered: [0, 0] as [number, number],
   });
 
@@ -168,8 +168,15 @@ function MarkCanvas(props: {
       const r = el.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
       setView((v) => (e.ctrlKey || e.metaKey ? zoomAt(v, cx, cy, Math.exp(-e.deltaY * 0.01)) : fix({ z: v.z, x: v.x - e.deltaX, y: v.y - e.deltaY })));
     };
+    const onKey = (e: KeyboardEvent) => { if (e.key === ' ') st.current.space = e.type === 'keydown'; };
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -177,8 +184,8 @@ function MarkCanvas(props: {
     const c = ref.current;
     if (!c) return;
     const s = st.current, g = c.getContext('2d')!;
-    if (!s.out || s.out.width !== labels.w || s.out.height !== labels.h) s.out = new ImageData(labels.w, labels.h);
-    compose(base, labels, s.out, tool === 'shapes' ? shapes : null, s.hoverShape);
+    if (!s.out || s.out.width !== W || s.out.height !== H) s.out = new ImageData(W, H);
+    compose(base, labels, s.out, tool === 'shapes' ? shapes : null, s.hoverShape, sel);
     g.putImageData(s.out, 0, 0);
     const outline = (draw: () => void) => {
       g.lineWidth = 3 / view.z; g.strokeStyle = 'rgba(0,0,0,0.7)'; draw();
@@ -197,35 +204,44 @@ function MarkCanvas(props: {
     }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(paint, [base, labels, shapes, props.version, tool, brush, view.z]);
+  useEffect(paint, [base, labels, sel, shapes, props.version, tool, brush, view.z]);
 
   const at = (e: RPointerEvent): [number, number] => {
     const r = ref.current!.getBoundingClientRect();
-    return [((e.clientX - r.left) * labels.w) / r.width, ((e.clientY - r.top) * labels.h) / r.height];
+    return [((e.clientX - r.left) * W) / r.width, ((e.clientY - r.top) * H) / r.height];
   };
   const shapeAt = (x: number, y: number) =>
-    shapes ? shapes.id[clamp(Math.floor(y), 0, labels.h - 1) * labels.w + clamp(Math.floor(x), 0, labels.w - 1)] : -1;
+    shapes ? shapes.id[clamp(Math.floor(y), 0, H - 1) * W + clamp(Math.floor(x), 0, W - 1)] : -1;
+  /** What a brush stroke along `path` selects: it follows the photo's edges when it can. */
+  const strokeHit = (path: [number, number][]) => {
+    if (fine) return smartStroke(base, fine, W, H, path, brush, props.tol * 0.003);
+    const t: LabelMap = { w: W, h: H, data: new Uint8Array(W * H) };
+    stamp(t, path[0][0], path[0][1], brush, 1);
+    for (let i = 1; i < path.length; i++) stampLine(t, path[i - 1][0], path[i - 1][1], path[i][0], path[i][1], brush, 1);
+    return t.data;
+  };
 
   const down = (e: RPointerEvent) => {
     const s = st.current;
     ref.current!.setPointerCapture(e.pointerId);
-    if (e.button === 1 || e.button === 2 || e.altKey) {
+    if (e.button === 1 || e.button === 2 || s.space) {
       s.pan = { sx: e.clientX, sy: e.clientY, x: view.x, y: view.y };
       return;
     }
     if (e.button !== 0) return;
     const [x, y] = at(e);
     props.onBefore();
+    // Alt always takes away and Shift always adds, like most picture editors; otherwise the chosen mode applies.
+    s.sub = e.altKey ? true : e.shiftKey ? false : props.subtract;
     s.drawing = true;
     s.lx = x; s.ly = y;
     if (tool === 'shapes') {
-      if (shapes) { fillShape(labels, shapes, x, y, target); s.lastShape = shapeAt(x, y); }
-    } else if (tool === 'brush' && props.snap) {
-      s.before = labels.data.slice();
+      if (shapes) { combine(sel, shapeMask(shapes, W, H, x, y), s.sub); s.lastShape = shapeAt(x, y); }
+    } else if (tool === 'brush') {
+      s.before = sel.slice();
       s.path = [[x, y]];
-      snapStroke(labels, base, s.path, brush, props.tol * 0.003, target);
-    } else if (tool === 'brush') stamp(labels, x, y, brush, target);
-    else s.pts = [[x, y]];
+      combine(sel, strokeHit(s.path), s.sub);
+    } else s.pts = [[x, y]];
     paint();
   };
   const move = (e: RPointerEvent) => {
@@ -242,18 +258,17 @@ function MarkCanvas(props: {
     if (s.hoverShape !== was) s.entered = [x, y];
     if (s.drawing) {
       if (tool === 'shapes') {
-        // Dragging across shapes marks each one, once the cursor is properly inside it. Brushing a
+        // Dragging across shapes takes each one, once the cursor is properly inside it. Brushing a
         // neighbour's edge on the way past does not count.
         const deep = Math.hypot(x - s.entered[0], y - s.entered[1]) >= 6;
-        if (shapes && deep && s.hoverShape !== s.lastShape) { fillShape(labels, shapes, x, y, target); s.lastShape = s.hoverShape; }
+        if (shapes && deep && s.hoverShape !== s.lastShape) { combine(sel, shapeMask(shapes, W, H, x, y), s.sub); s.lastShape = s.hoverShape; }
       } else if (tool === 'brush' && s.before) {
-        // Redo the whole stroke from the saved marks each time, so the snapped edge follows the brush live.
+        // Redo the whole stroke from the saved selection each time, so the snapped edge follows the brush live.
         if (Math.hypot(x - s.lx, y - s.ly) < Math.max(1, brush / 4)) return paint();
         s.path.push([x, y]);
-        labels.data.set(s.before);
-        snapStroke(labels, base, s.path, brush, props.tol * 0.003, target);
-      } else if (tool === 'brush') stampLine(labels, s.lx, s.ly, x, y, brush, target);
-      else s.pts.push([x, y]);
+        sel.set(s.before);
+        combine(sel, strokeHit(s.path), s.sub);
+      } else s.pts.push([x, y]);
       s.lx = x; s.ly = y;
     }
     paint();
@@ -262,7 +277,7 @@ function MarkCanvas(props: {
     const s = st.current;
     s.pan = null;
     if (!s.drawing) return;
-    if (tool === 'lasso' && s.pts.length > 2) fillPolygon(labels, s.pts, target);
+    if (tool === 'lasso' && s.pts.length > 2) combine(sel, polygonMask(W, H, s.pts), s.sub);
     s.drawing = false;
     s.pts = [];
     s.path = [];
@@ -278,8 +293,8 @@ function MarkCanvas(props: {
         ref={ref}
         className="mark-canvas"
         style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
-        width={labels.w}
-        height={labels.h}
+        width={W}
+        height={H}
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
@@ -302,12 +317,15 @@ const DEFAULTS = {
   colors: 10, smooth: 2, clean: 1, brightness: 0, contrast: 0, saturation: 0, lift: 0, tones: 3, outline: true, evenLight: true,
   /** Detail chosen for each area: 1-6 flat tones, or 0 for full detail. */
   areaTones: {} as Record<number, number>,
+  /** Soft edge chosen for each area: stitches blended either side of its boundary (0 is a crisp edge). */
+  areaFeather: {} as Record<number, number>,
 };
 type Settings = typeof DEFAULTS;
 
 const DETAIL_CHOICES: [number, string][] = [
   [1, '1 flat color'], [2, '2 tones'], [3, '3 tones'], [4, '4 tones'], [5, '5 tones'], [6, '6 tones'], [0, 'Full detail'],
 ];
+const EDGE_CHOICES: [number, string][] = [[0, 'Crisp edge'], [1, 'Soft edge'], [2, 'Softer edge'], [3, 'Softest edge']];
 
 /** Remembered across a refresh so an unfinished conversion reopens by itself. */
 export const CONVERTING_KEY = 'crosspattern.converting';
@@ -332,19 +350,26 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   const [set, setSet] = useState<Settings>(DEFAULTS);
   const change = (patch: Partial<Settings>) => setSet((s) => ({ ...s, ...patch }));
 
-  const [mode, setMode] = useState<Mode>('area');
   const [tool, setTool] = useState<MarkTool>('shapes');
-  /** The area new marks are added to, or null to start a new one with the next mark. */
+  /** Whether the tools take away from the selection instead of adding to it. */
+  const [subtract, setSubtract] = useState(false);
+  /** The area whose pixels were loaded into the selection for changing, if any. */
+  const [editing, setEditing] = useState<number | null>(null);
+  /** The area whose settings are showing in the list. */
   const [current, setCurrent] = useState<number | null>(null);
   const [shapeSize, setShapeSize] = useState(5);
-  const [brush, setBrush] = useState(16);
+  const [brush, setBrush] = useState(14);
   const [tol, setTol] = useState(30);
-  const [snap, setSnap] = useState(true);
   const blob = useRef<Blob | null>(null);
   const marks = useRef<{ labels: LabelMap; crop: Crop } | null>(null);
-  const history = useRef<Uint8Array[]>([]);
+  /** The current selection: 1 for each selected pixel of the label map. */
+  const selection = useRef<Uint8Array>(new Uint8Array(0));
+  const history = useRef<{ labels: Uint8Array; sel: Uint8Array }[]>([]);
+  /** Bumped when marks change (the pattern is converted again) and when only the selection changes. */
   const [version, setVersion] = useState(0);
+  const [selVersion, setSelVersion] = useState(0);
   const bump = () => setVersion((v) => v + 1);
+  const bumpSel = () => setSelVersion((v) => v + 1);
   const out = useRef<HTMLCanvasElement>(null);
 
   const close = () => {
@@ -375,7 +400,12 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
 
   const undoMark = () => {
     const prev = history.current.pop();
-    if (prev && marks.current) { marks.current.labels.data.set(prev); bump(); }
+    if (!prev || !marks.current) return;
+    marks.current.labels.data.set(prev.labels);
+    if (selection.current.length === prev.sel.length) selection.current.set(prev.sel);
+    setEditing(null);
+    bump();
+    bumpSel();
   };
 
   // On opening: a dropped picture starts fresh; otherwise pick up the saved conversion, if there is one.
@@ -475,13 +505,17 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   };
 
   const labels = step === 'areas' ? marks.current?.labels ?? null : null;
+  if (labels && selection.current.length !== labels.data.length) selection.current = new Uint8Array(labels.data.length);
+  const sel = selection.current;
   const base = useMemo(
     () => (img && labels ? makeBase(img, crop, labels.w, labels.h) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [img, labels],
   );
   const dShapeSize = useDeferredValue(shapeSize);
+  // The photo split two ways: into the shapes you click, and into much smaller pieces the brush follows.
   const shapes = useMemo(() => (base && labels ? findShapes(base, labels.w, labels.h, dShapeSize) : null), [base, labels, dShapeSize]);
+  const fine = useMemo(() => (base && labels ? findShapes(base, labels.w, labels.h, 2) : null), [base, labels]);
   const sampled = useMemo(
     () => (img && labels ? sampleImage(img, crop, w, h, labels) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -492,13 +526,9 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   const result = useMemo(() => (sampled ? quantize(sampled, dSet) : null), [sampled, dSet]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const areas = useMemo(() => (labels ? areaIds(labels) : []), [labels, version]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const selected = useMemo(() => sel.reduce((a, v) => a + v, 0), [sel, selVersion]);
   const tonesOf = (id: number) => set.areaTones[id] ?? (id < CARTOON0 ? 1 : set.tones);
-  // What the next mark paints: the chosen area (a fresh one if none is chosen), removal, or nothing.
-  const target = !labels ? NONE : mode === 'remove' ? REMOVE : mode === 'erase' ? NONE : current ?? nextCartoonId(labels);
-  const marked = () => {
-    if (mode === 'area' && current === null) setCurrent(target);
-    bump();
-  };
 
   useEffect(() => {
     const c = out.current;
@@ -508,20 +538,54 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
     c.getContext('2d')!.putImageData(resultToImageData(result), 0, 0);
   }, [result, step]);
 
-  const edit_ = (fn: (m: LabelMap) => void) => {
-    if (!labels) return;
-    pushHistory();
-    fn(labels);
-    bump();
-  };
   const pushHistory = () => {
     if (!labels) return;
-    history.current.push(labels.data.slice());
+    history.current.push({ labels: labels.data.slice(), sel: sel.slice() });
     if (history.current.length > 40) history.current.shift();
   };
+  /** Changes the selection itself (smooth, grow, invert...). */
+  const reshape = (fn: (s: Uint8Array, w: number, h: number) => void) => {
+    if (!labels) return;
+    pushHistory();
+    fn(sel, labels.w, labels.h);
+    bumpSel();
+  };
+  /** Gives everything selected one mark, then clears the selection ready for the next thing. */
+  const assign = (label: number, replacing?: number) => {
+    if (!labels || !selected) return;
+    pushHistory();
+    const d = labels.data;
+    if (replacing !== undefined) for (let i = 0; i < d.length; i++) if (d[i] === replacing) d[i] = NONE;
+    for (let i = 0; i < d.length; i++) if (sel[i]) d[i] = label;
+    if (label >= FLAT0) fillHoles(labels, label, Math.round(d.length * 0.004));
+    sel.fill(0);
+    setEditing(null);
+    if (label >= FLAT0) setCurrent(label);
+    bump();
+    bumpSel();
+  };
+  /** Loads an area's pixels as the selection, so it can be added to or trimmed and then updated. */
+  const editArea = (id: number) => {
+    if (!labels) return;
+    pushHistory();
+    for (let i = 0; i < sel.length; i++) sel[i] = labels.data[i] === id ? 1 : 0;
+    setEditing(id);
+    setCurrent(id);
+    bumpSel();
+  };
   const removeArea = (id: number) => {
-    edit_((m) => { for (let i = 0; i < m.data.length; i++) if (m.data[i] === id) m.data[i] = NONE; });
+    if (!labels) return;
+    pushHistory();
+    for (let i = 0; i < labels.data.length; i++) if (labels.data[i] === id) labels.data[i] = NONE;
     if (current === id) setCurrent(null);
+    if (editing === id) { setEditing(null); sel.fill(0); bumpSel(); }
+    bump();
+  };
+  const markRest = (label: number) => {
+    if (!labels) return;
+    pushHistory();
+    fillUnmarked(labels, label);
+    bump();
   };
 
   const create = async () => {
@@ -637,66 +701,100 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
           <div className="areas">
             <div className="controls">
               <div className="block">
-                <h3>1. What are you marking?</h3>
-                <Segmented value={mode} set={setMode} options={[['area', 'An area'], ['remove', 'Remove'], ['erase', 'Unmark']]} />
-                <p className="hint">{MODE_HELP[mode]}</p>
-                {(areas.length > 0 || mode === 'area') && (
-                  <ul className="arealist">
-                    {areas.map((id, n) => {
-                      const [r, g, b] = areaTint(id);
-                      return (
-                        <li key={id} className={mode === 'area' && current === id ? 'on' : ''} onClick={() => { setMode('area'); setCurrent(id); }}>
-                          <span className="chip" style={{ background: `rgb(${r},${g},${b})` }} />
-                          <span className="grow">Area {n + 1}</span>
-                          <select
-                            value={tonesOf(id)}
-                            title="How much detail this area keeps"
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => change({ areaTones: { ...set.areaTones, [id]: Number(e.target.value) } })}
-                          >
-                            {DETAIL_CHOICES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-                          </select>
-                          <button className="btn ghost small" title="Unmark this area" onClick={(e) => { e.stopPropagation(); removeArea(id); }}>✕</button>
-                        </li>
-                      );
-                    })}
-                    <li className={'new' + (mode === 'area' && current === null ? ' on' : '')} onClick={() => { setMode('area'); setCurrent(null); }}>
-                      <span className="chip plus">+</span>
-                      <span className="grow">{areas.length ? 'New area' : 'Your first area: mark it on the photo'}</span>
-                    </li>
-                  </ul>
-                )}
-              </div>
-              <div className="block">
-                <h3>2. Mark it on the photo</h3>
-                <Segmented value={tool} set={setTool} options={[['shapes', 'Shapes'], ['brush', 'Brush'], ['lasso', 'Lasso']]} />
+                <h3>1. Select something on the photo</h3>
+                <Segmented value={tool} set={setTool} options={[['shapes', 'Shapes'], ['brush', 'Smart brush'], ['lasso', 'Lasso']]} />
+                <Segmented
+                  value={subtract ? 'sub' : 'add'}
+                  set={(v) => setSubtract(v === 'sub')}
+                  options={[['add', 'Add to selection'], ['sub', 'Take away']]}
+                />
                 {tool === 'shapes' && (
                   <Slider label="Shape size" value={shapeSize} min={1} max={10} set={setShapeSize}
-                    hint="Click a shape on the photo, or drag across several. Smaller shapes follow finer edges." />
+                    hint="Click a shape, or drag across several." />
                 )}
                 {tool === 'brush' && <Slider label="Brush size" value={brush} min={2} max={60} set={setBrush} />}
                 {tool === 'brush' && (
-                  <label className="check" title="The mark spreads to the edges of what you paint on, and pulls back from what you overshoot">
-                    <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> Snap to edges
-                  </label>
+                  <Slider label="Reach" value={tol} min={0} max={100} set={setTol}
+                    hint="Paint along something and the brush follows its edges. Higher takes in more similar color nearby; 0 takes only what you paint over." />
                 )}
-                {tool === 'brush' && snap && (
-                  <Slider label="Edge sensitivity" value={tol} min={2} max={100} set={setTol}
-                    hint="Lower stops at fainter edges; higher spreads further." />
-                )}
-                {tool === 'lasso' && <p className="hint">Draw around something; everything inside is marked.</p>}
+                {tool === 'lasso' && <p className="hint">Draw around something; everything inside is selected.</p>}
+                <p className="hint">Hold Shift to add or Alt to take away, whichever is chosen.</p>
                 <div className="row">
-                  <button className="btn small" disabled={!history.current.length} onClick={undoMark}>Undo</button>
-                  <button className="btn small" onClick={() => { edit_((m) => m.data.fill(NONE)); setCurrent(null); }}>Clear all</button>
-                  {mode !== 'erase' && (
+                  <button className="btn small" disabled={!selected} title="Round off ragged edges and drop specks" onClick={() => reshape((s, w, h) => smoothMask(s, w, h, 3))}>Smooth</button>
+                  <button className="btn small" disabled={!selected} title="Make the selection a little bigger all round" onClick={() => reshape((s, w, h) => growMask(s, w, h, 2))}>Grow</button>
+                  <button className="btn small" disabled={!selected} title="Make the selection a little smaller all round" onClick={() => reshape((s, w, h) => growMask(s, w, h, -2))}>Shrink</button>
+                  <button className="btn small" disabled={!selected} title="Fill in small gaps inside the selection" onClick={() => reshape((s, w, h) => closeHoles(s, w, h, Math.round(s.length * 0.01)))}>Fill gaps</button>
+                  <button className="btn small" title="Select everything that is not selected, and the other way round" onClick={() => reshape((s) => { for (let i = 0; i < s.length; i++) s[i] = s[i] ? 0 : 1; })}>Invert</button>
+                  <button className="btn small" disabled={!selected} onClick={() => { reshape((s) => s.fill(0)); setEditing(null); }}>Select none</button>
+                </div>
+              </div>
+              <div className="block">
+                <h3>2. Say what the selection is</h3>
+                <p className="hint">
+                  {selected ? `${Math.max(1, Math.round((selected / sel.length) * 100))}% of the photo is selected.` : 'Nothing is selected yet.'}
+                  {editing !== null && ` You are changing Area ${areas.indexOf(editing) + 1}.`}
+                </p>
+                <div className="row">
+                  {editing !== null ? (
+                    <button className="btn small primary" disabled={!selected} onClick={() => assign(editing, editing)}>Update Area {areas.indexOf(editing) + 1}</button>
+                  ) : (
                     <button
-                      className="btn small"
-                      title="Applies this to everything you have not marked yet"
-                      onClick={() => { edit_((m) => fillUnmarked(m, target)); marked(); }}
+                      className="btn small primary"
+                      disabled={!selected}
+                      title="One thing in the picture, with colors and a level of detail of its own"
+                      onClick={() => assign(nextCartoonId(labels))}
                     >
-                      {mode === 'remove' ? 'Remove the rest' : 'Add the rest'}
+                      New area
                     </button>
                   )}
+                  <button className="btn small" disabled={!selected} title="Leave this part as empty fabric" onClick={() => assign(REMOVE)}>Remove</button>
+                  <button className="btn small" disabled={!selected} title="Clear any marks here" onClick={() => assign(NONE)}>Unmark</button>
+                </div>
+                {areas.length > 0 && (
+                  <ul className="arealist">
+                    {areas.map((id, n) => {
+                      const [r, g, b] = areaTint(id), open = current === id;
+                      return (
+                        <li key={id} className={open ? 'on' : ''} onClick={() => setCurrent(open ? null : id)}>
+                          <div className="line">
+                            <span className="chip" style={{ background: `rgb(${r},${g},${b})` }} />
+                            <span className="grow">Area {n + 1}</span>
+                            <span className="muted">{DETAIL_CHOICES.find(([v]) => v === tonesOf(id))?.[1]}</span>
+                            <button className="btn ghost small" title="Unmark this area" onClick={(e) => { e.stopPropagation(); removeArea(id); }}>✕</button>
+                          </div>
+                          {open && (
+                            <div className="line" onClick={(e) => e.stopPropagation()}>
+                              <select
+                                value={tonesOf(id)}
+                                title="How much detail this area keeps"
+                                onChange={(e) => change({ areaTones: { ...set.areaTones, [id]: Number(e.target.value) } })}
+                              >
+                                {DETAIL_CHOICES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                              </select>
+                              <select
+                                value={set.areaFeather[id] ?? 0}
+                                title="A soft edge blends this area into what is next to it instead of ending on a hard line"
+                                onChange={(e) => change({ areaFeather: { ...set.areaFeather, [id]: Number(e.target.value) } })}
+                              >
+                                {EDGE_CHOICES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                              </select>
+                              <button className="btn small" title="Load this area as the selection, to add to it or trim it" onClick={() => editArea(id)}>Change</button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                <div className="row">
+                  <button className="btn small" disabled={!history.current.length} onClick={undoMark}>Undo</button>
+                  <button className="btn small" title="Everything you have not marked becomes empty fabric" onClick={() => markRest(REMOVE)}>Remove the rest</button>
+                  <button
+                    className="btn small"
+                    onClick={() => { pushHistory(); labels.data.fill(NONE); sel.fill(0); setCurrent(null); setEditing(null); bump(); bumpSel(); }}
+                  >
+                    Clear all
+                  </button>
                 </div>
               </div>
               <div className="block">
@@ -708,7 +806,7 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
                 {areas.length > 0 && (
                   <>
                     <label className="check">
-                      <input type="checkbox" checked={set.outline} onChange={(e) => change({ outline: e.target.checked })} /> Dark outline around each area
+                      <input type="checkbox" checked={set.outline} onChange={(e) => change({ outline: e.target.checked })} /> Dark outline around crisp areas
                     </label>
                     <label className="check">
                       <input type="checkbox" checked={set.evenLight} onChange={(e) => change({ evenLight: e.target.checked })} /> Brighten areas that are in shadow
@@ -729,11 +827,11 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
             <figure>
               <div className="fit" style={fitStyle(labels.w / labels.h, 56)}>
                 <MarkCanvas
-                  base={base} labels={labels} shapes={shapes} target={target} tool={tool} brush={brush} tol={tol} snap={snap}
-                  version={version} onBefore={pushHistory} onChange={marked}
+                  base={base} labels={labels} sel={sel} shapes={shapes} fine={fine} tool={tool} subtract={subtract}
+                  brush={brush} tol={tol} version={version * 100000 + selVersion} onBefore={pushHistory} onChange={bumpSel}
                 />
               </div>
-              <figcaption>Photo: mark things here. Pinch or ⌘/Ctrl-scroll to zoom, scroll or Alt-drag to move.</figcaption>
+              <figcaption>Photo: the selection is blue. Pinch or ⌘/Ctrl-scroll to zoom, scroll or Space-drag to move.</figcaption>
             </figure>
             <figure>
               <div className="fit" style={{ ...fitStyle(w / h, 56), background: FABRIC }}>

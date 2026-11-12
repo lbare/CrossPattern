@@ -32,6 +32,8 @@ export interface ConvertOptions {
   tones?: number;
   /** Detail per area id: 1-6 flat tones, or 0 to keep every detail. */
   areaTones?: Record<number, number>;
+  /** Soft edge per area id: how many stitches either side of its boundary are blended (0-3). */
+  areaFeather?: Record<number, number>;
   /** Draw a dark one-stitch outline around each cartoon area. */
   outline?: boolean;
   /** Brighten cartoon areas that sit in shadow, so they look drawn rather than photographed. */
@@ -280,6 +282,28 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
   const tonesOf = (l: number) => o.areaTones?.[l] ?? (l < CARTOON0 ? 1 : o.tones ?? 3);
   const relabel = src.label.slice();
   for (let i = 0; i < relabel.length; i++) if (relabel[i] >= FLAT0 && tonesOf(relabel[i]) === 0) relabel[i] = DETAIL;
+  // Round off area outlines: a stitch whose mark is shared by fewer than three of its neighbours takes the
+  // mark most of them have. This removes the one-stitch spikes a hand-made or ragged selection leaves.
+  for (let pass = 0; pass < 2; pass++) {
+    const from = relabel.slice();
+    for (let y = 0; y < src.h; y++) for (let x = 0; x < src.w; x++) {
+      const i = y * src.w + x, l = from[i];
+      if (!src.mask[i] || l === REMOVE) continue;
+      const tally = new Map<number, number>();
+      let same = 0, best = l, bestN = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if ((!dx && !dy) || xx < 0 || yy < 0 || xx >= src.w || yy >= src.h) continue;
+        const j = yy * src.w + xx;
+        if (!src.mask[j] || from[j] === REMOVE) continue;
+        if (from[j] === l) { same++; continue; }
+        const c2 = (tally.get(from[j]) ?? 0) + 1;
+        tally.set(from[j], c2);
+        if (c2 > bestN) { bestN = c2; best = from[j]; }
+      }
+      if (same < 3 && bestN > same) relabel[i] = best;
+    }
+  }
   let s = adjust({ ...src, label: relabel }, o);
   s = cartoonLight(s, o.evenLight !== false);
   if (o.smooth > 0) s = smooth(s, o.smooth * 2);
@@ -340,6 +364,52 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
   // Cartoon areas are always tidied: drawn shapes have no speckle.
   if (areas.size) tidy(2, (l) => l >= FLAT0, true);
 
+  // Soft edges: around an area set to feather, each stitch near the boundary takes whichever nearby color
+  // best matches the blurred picture there, so the two sides run into each other instead of meeting at a
+  // hard line.
+  const featherOf = (l: number) => Math.max(0, Math.min(3, o.areaFeather?.[l] ?? 0));
+  for (const [area, idx] of areas) {
+    const f = featherOf(area);
+    if (!f) continue;
+    const near = new Int8Array(n);
+    let front: number[] = [];
+    const touch = (i: number, d: number) => { if (!near[i] && mask[i]) { near[i] = d; front.push(i); } };
+    const around = (i: number) => {
+      const x = i % w;
+      return [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i >= w ? i - w : -1, i < n - w ? i + w : -1].filter((j) => j >= 0);
+    };
+    for (const i of idx) for (const j of around(i)) if (mask[j] && label[j] !== area) { touch(i, 1); touch(j, 1); }
+    const band = [...front];
+    for (let d = 2; d <= f; d++) {
+      const prev = front;
+      front = [];
+      for (const i of prev) for (const j of around(i)) touch(j, d);
+      band.push(...front);
+    }
+    const snap = cells.slice();
+    for (const i of band) {
+      const x = i % w, y = (i / w) | 0;
+      let sl = 0, sa = 0, sb = 0, cnt = 0;
+      const choices = new Set<number>();
+      for (let yy = Math.max(0, y - f); yy <= Math.min(h - 1, y + f); yy++) {
+        for (let xx = Math.max(0, x - f); xx <= Math.min(w - 1, x + f); xx++) {
+          const j = yy * w + xx;
+          if (!mask[j] || !snap[j]) continue;
+          sl += s.L[j]; sa += s.A[j]; sb += s.B[j]; cnt++;
+          choices.add(snap[j]);
+        }
+      }
+      if (!cnt) continue;
+      sl /= cnt; sa /= cnt; sb /= cnt;
+      let best = snap[i], bd = Infinity;
+      for (const v of choices) {
+        const col = colors[v - 1], d = (col[0] - sl) ** 2 + (col[1] - sa) ** 2 + (col[2] - sb) ** 2;
+        if (d < bd) { bd = d; best = v; }
+      }
+      cells[i] = best;
+    }
+  }
+
   if (o.outline && areas.size) {
     // One shared dark line color, drawn on the outermost stitches of each cartoon area wherever it
     // meets something else (not along the edge of the canvas).
@@ -348,7 +418,9 @@ export function quantize(src: Sampled, o: ConvertOptions): ConvertResult {
     colors.push([Math.min(0.24, dark * 0.8), 0.006, 0.01]);
     const line = colors.length;
     const edge: number[] = [];
-    for (const idx of areas.values()) {
+    for (const [area, idx] of areas) {
+      // A feathered area has a soft edge, so it gets no hard line round it.
+      if (featherOf(area)) continue;
       for (const i of idx) {
         const x = i % w, y = (i / w) | 0, l = label[i];
         const differs = (xx: number, yy: number) => xx >= 0 && yy >= 0 && xx < w && yy < h && (label[yy * w + xx] !== l || !mask[yy * w + xx]);

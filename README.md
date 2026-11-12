@@ -12,8 +12,8 @@ There is nothing to install and no account. Your patterns stay in your own brows
 ## What it does
 
 - **Grid editor**: pencil, eraser, fill, line, rectangle, ellipse, select and move, and backstitch outlines.
-- **Picture conversion**: crop a photo to the exact stitch count you want, click the shapes that matter into
-  areas, choose how much detail each area keeps, and remove the rest. It is saved as you go.
+- **Picture conversion**: crop a photo to the exact stitch count you want, select the things that matter with
+  a brush that follows edges, give each its own colors, detail and soft or crisp edge, and remove the rest.
 - **Fine-tuning**: show the original photo over the pattern, repaint single colors, tidy noisy patches, bring
   back parts of the first conversion, or re-convert just one area with different settings.
 - **Colors**: any color you like, each with a chart symbol and a live stitch count. Highlight, lock, merge,
@@ -56,19 +56,26 @@ picture in full. **Mirror** in the top bar repeats everything you paint on the o
 
 Press **Convert picture** and choose, drop or paste an image.
 
-![Marking a photo: the kitten, plant and pot are three areas and the background is removed](docs/convert.png)
+![Converting a photo: three areas, the background removed, and part of the kitten selected](docs/convert.png)
 
 1. **Crop and size.** Type the width and height in stitches. The crop box takes that shape; drag it or a corner
    to choose what goes in. You see the total stitch count and the finished size on your fabric count.
-2. **Areas and colors.** There are only three things to mark on the photo:
-   - **An area** is one thing in the picture: the cat, a leaf, the pot. Each area gets colors of its own and
-     its own level of detail: 1 flat color, 2 to 6 tones, or full detail.
-   - **Remove** leaves a part as empty fabric.
-   - **Unmark** clears a mark.
+2. **Areas and colors.** This works like selecting in a picture editor: select something, then say what it is.
 
-   The photo is split into its obvious **shapes** for you: move over it to see them, click one to mark it, or
-   drag across several. For anything the shapes miss there is a brush that snaps to edges and a lasso.
-   "Remove the rest" cuts out the background in one click once your areas are marked.
+   **Select** with any of three tools. The selection shows in blue.
+   - **Shapes**: the photo is split into its obvious shapes for you. Click one, or drag across several.
+   - **Smart brush**: paint roughly along something and the brush follows its real edges.
+   - **Lasso**: draw around something.
+
+   Every tool adds to the selection, or takes away with "Take away" chosen. Shift always adds and Alt always
+   takes away. Smooth, Grow, Shrink, Fill gaps and Invert tidy the selection.
+
+   **Then say what it is**:
+   - **New area**: one thing in the picture (the cat, the roof, a wall). Each area has colors of its own and
+     its own settings: how much detail it keeps (1 flat color, 2 to 6 tones, or full detail) and whether its
+     edge is crisp or soft. "Change" loads an area back as the selection so you can add to it or trim it.
+   - **Remove**: leave it as empty fabric. "Remove the rest" does that for everything unmarked.
+   - **Unmark**: clear any marks there.
 
    Then set how many colors the unmarked parts get, how strongly to flatten them, and how much to clear stray
    stitches. "Adjust the photo" lifts shadows and changes brightness, contrast and color strength first.
@@ -77,8 +84,8 @@ Press **Convert picture** and choose, drop or paste an image.
 The conversion is saved as you work: close the window or refresh the page and it is still there. A pattern
 also remembers the conversion it came from, so "Edit conversion" in the right panel reopens it later.
 
-A good order: click the main subject as one area and give it 3 or 4 tones, add other objects as their own
-areas with fewer tones, remove the rest, then adjust each area's detail until it looks right. Because every
+A good order: select the main subject and make it an area with 3 or 4 tones, add other objects as their own
+areas with fewer tones, remove the rest, then adjust each area's detail and edge until it looks right. Because every
 area has its own colors, a subject in shadow is not drowned out by a busy background.
 
 ### Fine-tuning afterwards
@@ -165,7 +172,7 @@ It is a Vite + React + TypeScript app with no backend and no runtime dependencie
 | `src/CanvasView.tsx` | The drawing surface: rendering, pointer handling, and all the tools. |
 | `src/render.ts` | Drawing a pattern to a canvas, for the screen, PNG export and print pages. |
 | `src/convert.ts` | Picture conversion: sampling, shadow lifting, edge-preserving smoothing, cartoon areas, k-means color reduction. |
-| `src/marks.ts` | Marking a photo before conversion: shape detection, areas, the edge-snapping brush and lasso. |
+| `src/marks.ts` | Working on a photo before conversion: shape detection, the smart brush, selections and areas. |
 | `src/ImportDialog.tsx` | The two-step picture conversion dialog. |
 | `src/PalettePanel.tsx` | The right-hand panel: guide picture, colors, simplify tools, progress. |
 | `src/extras.tsx`, `src/dialogs.tsx`, `src/guide.tsx` | Projects, re-convert, export, resize and the built-in guide. |
