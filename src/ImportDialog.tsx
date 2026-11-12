@@ -1,16 +1,18 @@
-import { PointerEvent as RPointerEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CSSProperties, PointerEvent as RPointerEvent, ReactNode, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState,
+} from 'react';
 import { clamp } from './color';
 import { quantize, resultToImageData, sampleImage } from './convert';
 import { Modal } from './dialogs';
 import { ConversionRecord, DRAFT, deleteConversion, getConversion, putConversion } from './db';
 import {
   Base, CARTOON0, Crop, FLAT0, LabelMap, NONE, REMOVE, Shapes, areaIds, areaTint, closeHoles, combine, compose,
-  fillHoles, fillUnmarked, findShapes, growMask, makeBase, makeLabels, nextCartoonId, polygonMask, remapLabels,
-  shapeMask, smartStroke, smoothMask, stamp, stampLine,
+  fillHoles, fillUnmarked, findShapes, growMask, makeBase, makeLabels, near, nextCartoonId, polygonMask, remapLabels,
+  shapeMask, smartStroke, smoothMask, snapBoundaries, stamp, stampLine,
 } from './marks';
 import { MAX_SIZE, paletteFromHexes } from './model';
 import { FABRIC } from './render';
-import { S, openAsNewProject, photoDataUrl, setPattern } from './store';
+import { S, openAsNewProject, openDialog, photoDataUrl, setPattern } from './store';
 
 function loadImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -32,12 +34,6 @@ function cropForAspect(img: HTMLImageElement, aspect: number, around?: Crop): Cr
   const cx = around ? around.x + around.w / 2 : iw / 2, cy = around ? around.y + around.h / 2 : ih / 2;
   return { x: clamp(cx - w / 2, 0, iw - w), y: clamp(cy - h / 2, 0, ih - h), w, h };
 }
-
-/** CSS that makes a box as large as fits while keeping its shape. */
-const fitStyle = (aspect: number, maxVh: number) => ({
-  aspectRatio: String(aspect),
-  width: `min(100%, calc(${maxVh}vh * ${aspect}))`,
-});
 
 function Slider(props: { label: string; value: number; min: number; max: number; set: (n: number) => void; hint?: string }) {
   return (
@@ -98,7 +94,6 @@ function CropBox(props: { img: HTMLImageElement; crop: Crop; aspect: number; onC
     <div
       className="cropbox"
       ref={box}
-      style={fitStyle(iw / ih, 58)}
       onPointerMove={move}
       onPointerUp={() => { drag.current = null; }}
       onPointerCancel={() => { drag.current = null; }}
@@ -119,18 +114,44 @@ function CropBox(props: { img: HTMLImageElement; crop: Crop; aspect: number; onC
 
 // ---- Step 2: select things and say what they are -------------------------
 
-type MarkTool = 'shapes' | 'brush' | 'lasso';
+type MarkTool = 'shapes' | 'brush' | 'lasso' | 'erase';
 
 interface View { z: number; x: number; y: number }
 
+const MAX_ZOOM = 12;
+
+/** Keeps a box filling the space it is given while keeping its shape, however the window is resized. */
+export function FitBox(props: { aspect: number; children: ReactNode; className?: string; style?: CSSProperties }) {
+  const outer = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = outer.current!;
+    const measure = () => setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  let w = size.w, h = w / props.aspect;
+  if (h > size.h) { h = size.h; w = h * props.aspect; }
+  return (
+    <div className="fitbox" ref={outer}>
+      {size.w > 0 && size.h > 0 && (
+        <div className={props.className} style={{ width: Math.floor(w), height: Math.floor(h), ...props.style }}>{props.children}</div>
+      )}
+    </div>
+  );
+}
+
 /**
- * The photo, with the marks made so far and the current selection drawn over it. Every tool here
- * changes the selection only (adding to it, or taking away); turning a selection into an area or a
- * removed part is done with the buttons beside it.
+ * The photo, with the marks made so far and the current selection drawn over it. The selection tools
+ * change the selection only (adding to it, or taking away); turning a selection into an area or a removed
+ * part is done with the buttons beside it. The eraser is the exception: it unmarks directly.
  */
 function MarkCanvas(props: {
   base: Base; labels: LabelMap; sel: Uint8Array; shapes: Shapes | null; fine: Shapes | null; tool: MarkTool;
-  subtract: boolean; brush: number; tol: number; version: number; onBefore: () => void; onChange: () => void;
+  subtract: boolean; brush: number; tol: number; snap: boolean; version: number;
+  onBefore: () => void; onChange: () => void; onMarks: () => void;
 }) {
   const { base, labels, sel, shapes, fine, tool, brush } = props;
   const { w: W, h: H } = labels;
@@ -142,17 +163,23 @@ function MarkCanvas(props: {
     out: null as ImageData | null, pan: null as { sx: number; sy: number; x: number; y: number } | null, space: false,
     // For a brush stroke: where the brush has been, and the selection as it was before the stroke began.
     path: [] as [number, number][], before: null as Uint8Array | null,
+    // For the eraser: the marks before the stroke, and the area being erased.
+    marksBefore: null as Uint8Array | null, target: -1,
     // For the shapes tool: the shape under the cursor, the last one taken in this drag, and where the cursor entered.
     hoverShape: -1, lastShape: -1, entered: [0, 0] as [number, number],
+    // Fingers on the screen, for pinching to zoom.
+    touches: new Map<number, [number, number]>(),
+    pinch: null as { d: number; mx: number; my: number; view: View } | null,
+    width: 0,
   });
 
   /** Keeps the picture covering the box: no zooming out past 1 and no dragging it off the edge. */
   const fix = (v: View): View => {
-    const r = wrap.current!.getBoundingClientRect(), z = clamp(v.z, 1, 8);
+    const r = wrap.current!.getBoundingClientRect(), z = clamp(v.z, 1, MAX_ZOOM);
     return { z, x: clamp(v.x, r.width * (1 - z), 0), y: clamp(v.y, r.height * (1 - z), 0) };
   };
   const zoomAt = (v: View, cx: number, cy: number, factor: number): View => {
-    const z = clamp(v.z * factor, 1, 8);
+    const z = clamp(v.z * factor, 1, MAX_ZOOM);
     return fix({ z, x: cx - ((cx - v.x) * z) / v.z, y: cy - ((cy - v.y) * z) / v.z });
   };
   const zoomBy = (factor: number) => {
@@ -169,16 +196,32 @@ function MarkCanvas(props: {
       setView((v) => (e.ctrlKey || e.metaKey ? zoomAt(v, cx, cy, Math.exp(-e.deltaY * 0.01)) : fix({ z: v.z, x: v.x - e.deltaX, y: v.y - e.deltaY })));
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === ' ') st.current.space = e.type === 'keydown'; };
+    // When the window changes size, the same part of the photo stays in view.
+    st.current.width = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      const was = st.current.width, now = el.clientWidth;
+      st.current.width = now;
+      if (was && now && was !== now) setView((v) => fix({ z: v.z, x: (v.x * now) / was, y: (v.y * now) / was }));
+    });
+    ro.observe(el);
     el.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
     return () => {
+      ro.disconnect();
       el.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** The brush's radius in photo pixels. Brush size is measured on screen, so zooming in makes it finer. */
+  const radius = () => {
+    const c = ref.current;
+    const shown = c ? c.getBoundingClientRect().width : W;
+    return Math.max(0.75, (brush * W) / (shown || W));
+  };
 
   const paint = () => {
     const c = ref.current;
@@ -189,7 +232,7 @@ function MarkCanvas(props: {
     g.putImageData(s.out, 0, 0);
     const outline = (draw: () => void) => {
       g.lineWidth = 3 / view.z; g.strokeStyle = 'rgba(0,0,0,0.7)'; draw();
-      g.lineWidth = 1.25 / view.z; g.strokeStyle = '#fff'; draw();
+      g.lineWidth = 1.25 / view.z; g.strokeStyle = tool === 'erase' ? '#ff8a8a' : '#fff'; draw();
     };
     if (s.pts.length > 1) {
       outline(() => {
@@ -198,47 +241,89 @@ function MarkCanvas(props: {
         g.stroke();
       });
     }
-    if (s.hover && tool === 'brush') {
+    if (s.hover && (tool === 'brush' || tool === 'erase')) {
       const [hx, hy] = s.hover;
-      outline(() => { g.beginPath(); g.arc(hx, hy, brush, 0, Math.PI * 2); g.stroke(); });
+      outline(() => { g.beginPath(); g.arc(hx, hy, radius(), 0, Math.PI * 2); g.stroke(); });
     }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(paint, [base, labels, sel, shapes, props.version, tool, brush, view.z]);
 
-  const at = (e: RPointerEvent): [number, number] => {
+  const at = (e: { clientX: number; clientY: number }): [number, number] => {
     const r = ref.current!.getBoundingClientRect();
     return [((e.clientX - r.left) * W) / r.width, ((e.clientY - r.top) * H) / r.height];
   };
-  const shapeAt = (x: number, y: number) =>
-    shapes ? shapes.id[clamp(Math.floor(y), 0, H - 1) * W + clamp(Math.floor(x), 0, W - 1)] : -1;
-  /** What a brush stroke along `path` selects: it follows the photo's edges when it can. */
+  const index = (x: number, y: number) => clamp(Math.floor(y), 0, H - 1) * W + clamp(Math.floor(x), 0, W - 1);
+  const shapeAt = (x: number, y: number) => (shapes ? shapes.id[index(x, y)] : -1);
+  /** What a brush stroke along `path` covers: it follows the photo's edges when it can. */
   const strokeHit = (path: [number, number][]) => {
-    if (fine) return smartStroke(base, fine, W, H, path, brush, props.tol * 0.003);
+    const r = radius();
+    if (fine) return smartStroke(base, fine, W, H, path, r, props.tol * 0.003);
     const t: LabelMap = { w: W, h: H, data: new Uint8Array(W * H) };
-    stamp(t, path[0][0], path[0][1], brush, 1);
-    for (let i = 1; i < path.length; i++) stampLine(t, path[i - 1][0], path[i - 1][1], path[i][0], path[i][1], brush, 1);
+    stamp(t, path[0][0], path[0][1], r, 1);
+    for (let i = 1; i < path.length; i++) stampLine(t, path[i - 1][0], path[i - 1][1], path[i][0], path[i][1], r, 1);
     return t.data;
+  };
+  /** Paints the eraser stroke so far: the area it started on is unmarked wherever the stroke reaches. */
+  const eraseStroke = () => {
+    const s = st.current;
+    if (!s.marksBefore) return;
+    const hit = strokeHit(s.path), d = labels.data;
+    d.set(s.marksBefore);
+    for (let i = 0; i < d.length; i++) if (hit[i] && d[i] === s.target) d[i] = NONE;
+  };
+
+  /** Puts things back as they were before a stroke that a second finger turned into a pinch. */
+  const abandon = () => {
+    const s = st.current;
+    if (!s.drawing) return;
+    if (s.before) sel.set(s.before);
+    if (s.marksBefore) labels.data.set(s.marksBefore);
+    s.drawing = false; s.pts = []; s.path = []; s.before = null; s.marksBefore = null;
+    paint();
   };
 
   const down = (e: RPointerEvent) => {
     const s = st.current;
     ref.current!.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'touch') {
+      s.touches.set(e.pointerId, [e.clientX, e.clientY]);
+      if (s.touches.size === 2) {
+        abandon();
+        const [[ax, ay], [bx, by]] = [...s.touches.values()], r = wrap.current!.getBoundingClientRect();
+        s.pinch = { d: Math.hypot(ax - bx, ay - by), mx: (ax + bx) / 2 - r.left, my: (ay + by) / 2 - r.top, view };
+        return;
+      }
+      if (s.touches.size > 2) return;
+    }
     if (e.button === 1 || e.button === 2 || s.space) {
       s.pan = { sx: e.clientX, sy: e.clientY, x: view.x, y: view.y };
       return;
     }
     if (e.button !== 0) return;
     const [x, y] = at(e);
+    if (tool === 'erase') {
+      const target = labels.data[index(x, y)];
+      if (target === NONE) return;
+      props.onBefore();
+      s.drawing = true;
+      s.target = target;
+      s.marksBefore = labels.data.slice();
+      s.path = [[x, y]];
+      s.lx = x; s.ly = y;
+      eraseStroke();
+      paint();
+      return;
+    }
     props.onBefore();
     // Alt always takes away and Shift always adds, like most picture editors; otherwise the chosen mode applies.
     s.sub = e.altKey ? true : e.shiftKey ? false : props.subtract;
     s.drawing = true;
     s.lx = x; s.ly = y;
+    s.before = sel.slice();
     if (tool === 'shapes') {
       if (shapes) { combine(sel, shapeMask(shapes, W, H, x, y), s.sub); s.lastShape = shapeAt(x, y); }
     } else if (tool === 'brush') {
-      s.before = sel.slice();
       s.path = [[x, y]];
       combine(sel, strokeHit(s.path), s.sub);
     } else s.pts = [[x, y]];
@@ -246,6 +331,15 @@ function MarkCanvas(props: {
   };
   const move = (e: RPointerEvent) => {
     const s = st.current;
+    if (s.touches.has(e.pointerId)) s.touches.set(e.pointerId, [e.clientX, e.clientY]);
+    if (s.pinch && s.touches.size >= 2) {
+      const [[ax, ay], [bx, by]] = [...s.touches.values()], r = wrap.current!.getBoundingClientRect();
+      const p = s.pinch, mx = (ax + bx) / 2 - r.left, my = (ay + by) / 2 - r.top;
+      const z = clamp(p.view.z * (Math.hypot(ax - bx, ay - by) / p.d), 1, MAX_ZOOM);
+      // The point under the fingers when the pinch began stays under them.
+      setView(fix({ z, x: mx - ((p.mx - p.view.x) * z) / p.view.z, y: my - ((p.my - p.view.y) * z) / p.view.z }));
+      return;
+    }
     if (s.pan) {
       const p = s.pan;
       setView((v) => fix({ z: v.z, x: p.x + e.clientX - p.sx, y: p.y + e.clientY - p.sy }));
@@ -262,28 +356,52 @@ function MarkCanvas(props: {
         // neighbour's edge on the way past does not count.
         const deep = Math.hypot(x - s.entered[0], y - s.entered[1]) >= 6;
         if (shapes && deep && s.hoverShape !== s.lastShape) { combine(sel, shapeMask(shapes, W, H, x, y), s.sub); s.lastShape = s.hoverShape; }
-      } else if (tool === 'brush' && s.before) {
-        // Redo the whole stroke from the saved selection each time, so the snapped edge follows the brush live.
-        if (Math.hypot(x - s.lx, y - s.ly) < Math.max(1, brush / 4)) return paint();
+      } else if (tool === 'brush' || tool === 'erase') {
+        // Redo the whole stroke from where it began each time, so the snapped edge follows the brush live.
+        if (Math.hypot(x - s.lx, y - s.ly) < Math.max(0.75, radius() / 4)) return paint();
         s.path.push([x, y]);
-        sel.set(s.before);
-        combine(sel, strokeHit(s.path), s.sub);
+        if (tool === 'erase') eraseStroke();
+        else if (s.before) { sel.set(s.before); combine(sel, strokeHit(s.path), s.sub); }
       } else s.pts.push([x, y]);
       s.lx = x; s.ly = y;
     }
     paint();
   };
-  const up = () => {
+  const up = (e: RPointerEvent) => {
     const s = st.current;
+    s.touches.delete(e.pointerId);
+    if (s.pinch) { if (s.touches.size < 2) s.pinch = null; return; }
     s.pan = null;
     if (!s.drawing) return;
     if (tool === 'lasso' && s.pts.length > 2) combine(sel, polygonMask(W, H, s.pts), s.sub);
+    const reach = Math.ceil(radius() * 2 + 8);
+    if (tool === 'erase' && s.marksBefore) {
+      if (props.snap) {
+        // Settle the new edge of the erased area onto the photo's edges, without touching other areas.
+        const d = labels.data, before = s.marksBefore, was = new Uint8Array(d.length), mine = new Uint8Array(d.length);
+        for (let i = 0; i < d.length; i++) { was[i] = d[i] !== before[i] ? 1 : 0; mine[i] = d[i] === s.target ? 1 : 0; }
+        const free = near(was, W, H, reach);
+        for (let i = 0; i < d.length; i++) if (before[i] !== s.target) free[i] = 0;
+        snapBoundaries(mine, base, W, H, free, 8);
+        for (let i = 0; i < d.length; i++) if (free[i]) d[i] = mine[i] ? s.target : NONE;
+      }
+      props.onMarks();
+    } else if (s.before) {
+      if (props.snap) {
+        // Settle the edges this stroke made onto the photo's real edges nearby, whether it added or took away.
+        const diff = new Uint8Array(sel.length);
+        let any = false;
+        for (let i = 0; i < sel.length; i++) if (sel[i] !== s.before[i]) { diff[i] = 1; any = true; }
+        if (any) snapBoundaries(sel, base, W, H, near(diff, W, H, Math.min(reach, 30)), 8);
+      }
+      props.onChange();
+    }
     s.drawing = false;
     s.pts = [];
     s.path = [];
     s.before = null;
+    s.marksBefore = null;
     s.lastShape = -1;
-    props.onChange();
     paint();
   };
 
@@ -291,7 +409,7 @@ function MarkCanvas(props: {
     <div className="zoomwrap" ref={wrap}>
       <canvas
         ref={ref}
-        className="mark-canvas"
+        className={'mark-canvas' + (tool === 'erase' ? ' erasing' : '')}
         style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
         width={W}
         height={H}
@@ -305,7 +423,7 @@ function MarkCanvas(props: {
       <div className="zoombar">
         <button onClick={() => zoomBy(1 / 1.5)} disabled={view.z <= 1} title="Zoom out">−</button>
         <button onClick={() => setView({ z: 1, x: 0, y: 0 })} disabled={view.z <= 1} title="Show the whole picture">{Math.round(view.z * 100)}%</button>
-        <button onClick={() => zoomBy(1.5)} disabled={view.z >= 8} title="Zoom in">+</button>
+        <button onClick={() => zoomBy(1.5)} disabled={view.z >= MAX_ZOOM} title="Zoom in">+</button>
       </div>
     </div>
   );
@@ -358,7 +476,12 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   /** The area whose settings are showing in the list. */
   const [current, setCurrent] = useState<number | null>(null);
   const [shapeSize, setShapeSize] = useState(5);
-  const [brush, setBrush] = useState(14);
+  /** Brush size on screen, in pixels: zooming in makes the brush finer on the photo. */
+  const [brush, setBrush] = useState(18);
+  /** Whether strokes settle onto the photo's edges when they end. */
+  const [snap, setSnap] = useState(true);
+  /** Which pictures show beside the controls: phones have room for one at a time. */
+  const [show, setShow] = useState<'both' | 'photo' | 'pattern'>(() => (window.innerWidth < 900 ? 'photo' : 'both'));
   const [tol, setTol] = useState(30);
   const blob = useRef<Blob | null>(null);
   const marks = useRef<{ labels: LabelMap; crop: Crop } | null>(null);
@@ -439,6 +562,9 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
     };
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undoMark(); }
+      const typing = e.target instanceof HTMLInputElement && e.target.type !== 'range' && e.target.type !== 'checkbox';
+      if (!typing && e.key === '[') setBrush((b) => Math.max(4, b - 4));
+      if (!typing && e.key === ']') setBrush((b) => Math.min(120, b + 4));
     };
     window.addEventListener('paste', onPaste);
     window.addEventListener('keydown', onKey);
@@ -536,7 +662,7 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
     c.width = result.width;
     c.height = result.height;
     c.getContext('2d')!.putImageData(resultToImageData(result), 0, 0);
-  }, [result, step]);
+  }, [result, step, show]);
 
   const pushHistory = () => {
     if (!labels) return;
@@ -611,6 +737,8 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
     if (rec) putConversion(S.projectId, rec).catch(() => {});
     if (!edit) deleteConversion(DRAFT).catch(() => {});
     close();
+    // Offer to tidy up the specks and near-duplicate colors conversions leave behind.
+    openDialog('cleanup-new');
   };
 
   const stitches = result ? result.cells.reduce((n, v) => n + (v ? 1 : 0), 0) : 0;
@@ -623,7 +751,7 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
   const adjusted = set.brightness || set.contrast || set.saturation || set.lift;
 
   return (
-    <Modal title={edit ? 'Edit conversion' : 'Convert a picture'} onClose={close} size={img ? 'xl' : 'wide'}>
+    <Modal title={edit ? 'Edit conversion' : 'Convert a picture'} onClose={close} size={img ? 'full' : 'wide'}>
       {loading && <p className="hint loading">Loading…</p>}
       {!loading && !img && (
         <label
@@ -649,7 +777,7 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
 
       {img && step === 'crop' && (
         <>
-          <div className="split">
+          <div className="work split">
             <div className="controls">
               <div className="fields tight">
                 <label>Width (stitches)
@@ -686,7 +814,9 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
               </div>
             </div>
             <div className="stage">
-              <CropBox img={img} crop={crop} aspect={sizeOk ? w / h : crop.w / crop.h} onChange={setCrop} />
+              <FitBox aspect={img.naturalWidth / img.naturalHeight}>
+                <CropBox img={img} crop={crop} aspect={sizeOk ? w / h : crop.w / crop.h} onChange={setCrop} />
+              </FitBox>
             </div>
           </div>
           <footer>
@@ -698,28 +828,41 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
 
       {img && step === 'areas' && labels && base && (
         <>
-          <div className="areas">
+          <div className="work areas">
             <div className="controls">
               <div className="block">
                 <h3>1. Select something on the photo</h3>
-                <Segmented value={tool} set={setTool} options={[['shapes', 'Shapes'], ['brush', 'Smart brush'], ['lasso', 'Lasso']]} />
-                <Segmented
-                  value={subtract ? 'sub' : 'add'}
-                  set={(v) => setSubtract(v === 'sub')}
-                  options={[['add', 'Add to selection'], ['sub', 'Take away']]}
-                />
+                <Segmented value={tool} set={setTool} options={[['shapes', 'Shapes'], ['brush', 'Smart brush'], ['lasso', 'Lasso'], ['erase', 'Eraser']]} />
+                {tool !== 'erase' && (
+                  <Segmented
+                    value={subtract ? 'sub' : 'add'}
+                    set={(v) => setSubtract(v === 'sub')}
+                    options={[['add', 'Add to selection'], ['sub', 'Take away']]}
+                  />
+                )}
                 {tool === 'shapes' && (
                   <Slider label="Shape size" value={shapeSize} min={1} max={10} set={setShapeSize}
                     hint="Click a shape, or drag across several." />
                 )}
-                {tool === 'brush' && <Slider label="Brush size" value={brush} min={2} max={60} set={setBrush} />}
-                {tool === 'brush' && (
+                {(tool === 'brush' || tool === 'erase') && (
+                  <Slider label="Brush size" value={brush} min={4} max={120} set={setBrush}
+                    hint="Measured on screen, so zoom in for finer work. [ and ] change it." />
+                )}
+                {(tool === 'brush' || tool === 'erase') && (
                   <Slider label="Reach" value={tol} min={0} max={100} set={setTol}
                     hint="Paint along something and the brush follows its edges. Higher takes in more similar color nearby; 0 takes only what you paint over." />
                 )}
                 {tool === 'lasso' && <p className="hint">Draw around something; everything inside is selected.</p>}
-                <p className="hint">Hold Shift to add or Alt to take away, whichever is chosen.</p>
+                {tool === 'erase' ? (
+                  <p className="hint">Paint over part of a marked area to unmark just that part. Only the area you start on is erased, so its neighbours are safe.</p>
+                ) : (
+                  <p className="hint">Hold Shift to add or Alt to take away, whichever is chosen.</p>
+                )}
+                <label className="check" title="When you finish a stroke, its edge moves onto the nearest edge in the photo">
+                  <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> Snap to edges in the photo
+                </label>
                 <div className="row">
+                  <button className="btn small" disabled={!selected} title="Move the selection's edge onto the nearest edges in the photo" onClick={() => reshape((s, w, h) => snapBoundaries(s, base, w, h, null, 14))}>Snap edges</button>
                   <button className="btn small" disabled={!selected} title="Round off ragged edges and drop specks" onClick={() => reshape((s, w, h) => smoothMask(s, w, h, 3))}>Smooth</button>
                   <button className="btn small" disabled={!selected} title="Make the selection a little bigger all round" onClick={() => reshape((s, w, h) => growMask(s, w, h, 2))}>Grow</button>
                   <button className="btn small" disabled={!selected} title="Make the selection a little smaller all round" onClick={() => reshape((s, w, h) => growMask(s, w, h, -2))}>Shrink</button>
@@ -788,6 +931,14 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
                 )}
                 <div className="row">
                   <button className="btn small" disabled={!history.current.length} onClick={undoMark}>Undo</button>
+                  <button
+                    className="btn small"
+                    disabled={!areas.length}
+                    title="Move the edges between your areas onto the edges in the photo, where they have strayed over"
+                    onClick={() => { pushHistory(); snapBoundaries(labels.data, base, labels.w, labels.h, null, 12); bump(); }}
+                  >
+                    Snap area edges
+                  </button>
                   <button className="btn small" title="Everything you have not marked becomes empty fabric" onClick={() => markRest(REMOVE)}>Remove the rest</button>
                   <button
                     className="btn small"
@@ -824,21 +975,37 @@ export function ImportDialog({ onClose, initialFile, edit }: { onClose: () => vo
                 </details>
               </div>
             </div>
-            <figure>
-              <div className="fit" style={fitStyle(labels.w / labels.h, 56)}>
-                <MarkCanvas
-                  base={base} labels={labels} sel={sel} shapes={shapes} fine={fine} tool={tool} subtract={subtract}
-                  brush={brush} tol={tol} version={version * 100000 + selVersion} onBefore={pushHistory} onChange={bumpSel}
-                />
+            <div className="views">
+              <div className="viewbar">
+                <Segmented value={show} set={setShow} options={[['photo', 'Photo'], ['both', 'Both'], ['pattern', 'Pattern']]} />
+                <span className="hint grow">
+                  {show === 'pattern'
+                    ? `Pattern: ${w} × ${h}, ${stitches.toLocaleString()} stitches`
+                    : 'The selection is blue. Pinch or ⌘/Ctrl-scroll to zoom; scroll, Space-drag or two fingers to move.'}
+                </span>
               </div>
-              <figcaption>Photo: the selection is blue. Pinch or ⌘/Ctrl-scroll to zoom, scroll or Space-drag to move.</figcaption>
-            </figure>
-            <figure>
-              <div className="fit" style={{ ...fitStyle(w / h, 56), background: FABRIC }}>
-                <canvas ref={out} className="pixelated" />
+              <div className={'panes ' + show}>
+                {show !== 'pattern' && (
+                  <figure>
+                    <FitBox aspect={labels.w / labels.h} className="fit">
+                      <MarkCanvas
+                        base={base} labels={labels} sel={sel} shapes={shapes} fine={fine} tool={tool} subtract={subtract}
+                        brush={brush} tol={tol} snap={snap} version={version * 100000 + selVersion}
+                        onBefore={pushHistory} onChange={bumpSel} onMarks={bump}
+                      />
+                    </FitBox>
+                  </figure>
+                )}
+                {show !== 'photo' && (
+                  <figure>
+                    <FitBox aspect={w / h} className="fit" style={{ background: FABRIC }}>
+                      <canvas ref={out} className="pixelated" />
+                    </FitBox>
+                    {show === 'both' && <figcaption>Pattern: {w} × {h}, {stitches.toLocaleString()} stitches</figcaption>}
+                  </figure>
+                )}
               </div>
-              <figcaption>Pattern: {w} × {h}, {stitches.toLocaleString()} stitches</figcaption>
-            </figure>
+            </div>
           </div>
           <footer>
             <span className="hint grow">

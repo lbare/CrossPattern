@@ -200,6 +200,11 @@ export function PalettePanel() {
       <div className="cleanup">
         <h3>Simplify</h3>
         <div className="editor-row">
+          <button className="btn small" title="Merge look-alike colors, drop rare ones and absorb small patches, with a preview first" onClick={() => openDialog('cleanup')}>
+            Clean up…
+          </button>
+        </div>
+        <div className="editor-row">
           <label>Reduce to</label>
           <input type="number" min={1} max={99} value={target} onChange={(e) => setTarget(Number(e.target.value))} />
           <label>colors</label>

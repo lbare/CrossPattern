@@ -449,3 +449,148 @@ export function smartStroke(base: Base, fine: Shapes, w: number, h: number, path
   closeHoles(out, w, h, Math.max(20, Math.round(r * r)));
   return out;
 }
+
+// ---- Snapping to edges --------------------------------------------------
+
+/**
+ * Moves the boundaries between differently labelled parts of `lab` onto the photo's real edges nearby.
+ * `lab` holds one small number per pixel (a selection's 0 and 1, or the marks). Only pixels where `free`
+ * is set may change, and none moves more than about `band` pixels.
+ *
+ * Each pixel near a boundary goes to whichever label it looks most like, judged against that label's
+ * typical color close by. Those typical colors are taken only from pixels well inside each part (further
+ * than `band` from any boundary), so a mark that spilled over an edge can't vouch for its own spill. A
+ * small pull toward agreeing with the neighbours keeps the new boundary smooth instead of ragged.
+ * Returns how many pixels changed.
+ */
+export function snapBoundaries(lab: Uint8Array, base: Base, w: number, h: number, free: Uint8Array | null, band = 6): number {
+  const n = w * h;
+  // How far each pixel is from a boundary (4-connected steps), up to band + 1.
+  const far = band + 1, dist = new Uint8Array(n).fill(far), queue = new Int32Array(n);
+  let qh = 0, qt = 0;
+  for (let i = 0; i < n; i++) {
+    const x = i % w, v = lab[i];
+    if ((x > 0 && lab[i - 1] !== v) || (x < w - 1 && lab[i + 1] !== v) || (i >= w && lab[i - w] !== v) || (i < n - w && lab[i + w] !== v)) {
+      dist[i] = 0; queue[qt++] = i;
+    }
+  }
+  while (qh < qt) {
+    const i = queue[qh++], d = dist[i] + 1, x = i % w;
+    if (d >= far) continue;
+    const go = (j: number) => { if (dist[j] > d) { dist[j] = d; queue[qt++] = j; } };
+    if (x > 0) go(i - 1);
+    if (x < w - 1) go(i + 1);
+    if (i >= w) go(i - w);
+    if (i < n - w) go(i + w);
+  }
+  const movable = new Uint8Array(n);
+  let any = false;
+  for (let i = 0; i < n; i++) if (dist[i] <= band && (!free || free[i])) { movable[i] = 1; any = true; }
+  if (!any) return 0;
+
+  // The labels that meet at a movable pixel, and the typical color of each one nearby.
+  const used = new Set<number>();
+  for (let i = 0; i < n; i++) if (movable[i]) used.add(lab[i]);
+  const R = band * 2 + 4, s = lightlySmoothed(base, w, h);
+  const local = new Map<number, { L: Float32Array; A: Float32Array; B: Float32Array; N: Float32Array }>();
+  for (const l of used) {
+    const inside = (i: number) => lab[i] === l && dist[i] > band;
+    local.set(l, {
+      L: boxSum(w, h, R, (i) => (inside(i) ? s.L[i] : 0)),
+      A: boxSum(w, h, R, (i) => (inside(i) ? s.A[i] : 0)),
+      B: boxSum(w, h, R, (i) => (inside(i) ? s.B[i] : 0)),
+      N: boxSum(w, h, R, (i) => (inside(i) ? 1 : 0)),
+    });
+  }
+
+  // Settle the boundary a step at a time: each pass, a pixel may take a label from right beside it.
+  const SMOOTH = 0.035;
+  let cur = lab.slice(), changed = 0;
+  const cand: number[] = [];
+  for (let pass = 0; pass < band + 2; pass++) {
+    const next = cur.slice();
+    let moved = 0;
+    for (let i = 0; i < n; i++) {
+      if (!movable[i]) continue;
+      const x = i % w, y = (i / w) | 0, v = cur[i];
+      cand.length = 0;
+      cand.push(v);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const u = cur[yy * w + xx];
+        if (!cand.includes(u)) cand.push(u);
+      }
+      // A pixel whose own part has nothing solid to compare against nearby stays as it is.
+      const own = local.get(v);
+      if (cand.length < 2 || !own || own.N[i] < 4) continue;
+      let best = v, bestCost = Infinity;
+      for (const l of cand) {
+        const t = local.get(l);
+        if (!t || t.N[i] < 4) continue;
+        const k = t.N[i];
+        const dc = Math.sqrt((s.L[i] - t.L[i] / k) ** 2 + (s.A[i] - t.A[i] / k) ** 2 + (s.B[i] - t.B[i] / k) ** 2);
+        let other = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if ((dx || dy) && xx >= 0 && yy >= 0 && xx < w && yy < h && cur[yy * w + xx] !== l) other++;
+        }
+        const cost = dc + SMOOTH * other;
+        if (cost < bestCost - 1e-6) { bestCost = cost; best = l; }
+      }
+      if (best !== v) { next[i] = best; moved++; }
+    }
+    cur = next;
+    if (!moved) break;
+  }
+  for (let i = 0; i < n; i++) if (cur[i] !== lab[i]) { lab[i] = cur[i]; changed++; }
+  return changed;
+}
+
+/** Sums of `f` over the square of radius `r` around every pixel. */
+function boxSum(w: number, h: number, r: number, f: (i: number) => number): Float32Array {
+  const tmp = new Float32Array(w * h), out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    let acc = 0;
+    const row = y * w;
+    for (let x = 0; x <= Math.min(w - 1, r); x++) acc += f(row + x);
+    for (let x = 0; x < w; x++) {
+      tmp[row + x] = acc;
+      if (x + r + 1 < w) acc += f(row + x + r + 1);
+      if (x - r >= 0) acc -= f(row + x - r);
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = 0; y <= Math.min(h - 1, r); y++) acc += tmp[y * w + x];
+    for (let y = 0; y < h; y++) {
+      out[y * w + x] = acc;
+      if (y + r + 1 < h) acc += tmp[(y + r + 1) * w + x];
+      if (y - r >= 0) acc -= tmp[(y - r) * w + x];
+    }
+  }
+  return out;
+}
+
+const liteCache = new WeakMap<Base, { L: Float32Array; A: Float32Array; B: Float32Array }>();
+
+/** The photo's colors averaged over each pixel and its eight neighbours: enough to quiet noise, not enough to blur edges. */
+function lightlySmoothed(base: Base, w: number, h: number) {
+  let s = liteCache.get(base);
+  if (s) return s;
+  const one = (src: Float32Array) => {
+    const sum = boxSum(w, h, 1, (i) => src[i]), cnt = boxSum(w, h, 1, () => 1);
+    for (let i = 0; i < sum.length; i++) sum[i] /= cnt[i];
+    return sum;
+  };
+  s = { L: one(base.L), A: one(base.A), B: one(base.B) };
+  liteCache.set(base, s);
+  return s;
+}
+
+/** Pixels within `px` of anything set in `mask`. */
+export function near(mask: Uint8Array, w: number, h: number, px: number): Uint8Array {
+  const out = mask.slice();
+  growMask(out, w, h, px);
+  return out;
+}

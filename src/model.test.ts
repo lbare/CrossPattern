@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hexToRgb, inkFor, oklabToRgb, rgbToHex, rgbToOklab } from './color';
 import {
-  Pattern, colorSections, connectedCells, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints,
+  Pattern, cleanUp, colorSections, connectedCells, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints, mergeSmallPatches,
   mergeColor, outlineCells, outlineEdges, paletteFromHexes, reduceColors, removeColor, removeUnused, replaceAll,
   resized, serialize, tidyCell,
 } from './model';
@@ -220,5 +220,39 @@ describe('sections', () => {
     const p = grid(['110', '001']);
     p.done = Uint8Array.from([1, 0, 0, 0, 0, 1]);
     expect(colorSections(p, 1).list.map((s) => s.done)).toEqual([2]);
+  });
+});
+
+describe('cleaning up', () => {
+  const pat = (rows: string[], hexes: string[]) => {
+    const p = createPattern(rows[0].length, rows.length);
+    p.palette = hexes.map((hex, k) => ({ id: k + 1, hex, symbol: String(k) }));
+    rows.forEach((r, y) => [...r].forEach((ch, x) => { p.cells[y * p.width + x] = ch === '.' ? 0 : Number(ch); }));
+    return p;
+  };
+  it('merges small patches into what surrounds them, and fills pinholes', () => {
+    const p = pat(['11111', '11211', '11111', '1.111', '11111'], ['#ff0000', '#00ff00']);
+    expect(mergeSmallPatches(p.cells, 5, 5, 3)).toBe(2);
+    expect([...p.cells].every((v) => v === 1)).toBe(true);
+  });
+  it('keeps patches of locked colors and big patches', () => {
+    const p = pat(['11111', '11211', '11111'], ['#ff0000', '#00ff00']);
+    expect(mergeSmallPatches(p.cells, 5, 3, 3, new Set([2]))).toBe(0);
+    expect(mergeSmallPatches(p.cells, 5, 3, 1)).toBe(0);
+  });
+  it('merges look-alike colors into the more used one, and drops rare colors', () => {
+    const p = pat(['111122', '111122', '333333'], ['#808080', '#828282', '#0000ff']);
+    const r = cleanUp(p, { similar: 2, rare: 0, patch: 0, smooth: 0 });
+    expect(r.pattern.palette.map((c) => c.id)).toEqual([1, 3]);
+    expect(r.count).toBe(4);
+    expect(p.palette.length).toBe(3); // the original is untouched
+    const q = pat(['111111', '111113'], ['#808080', '#000000', '#0000ff']);
+    expect(cleanUp(q, { similar: 0, rare: 2, patch: 0, smooth: 0 }).pattern.palette.map((c) => c.id)).toEqual([1]);
+  });
+  it('never merges a locked color away', () => {
+    const p = pat(['111122', '111122'], ['#808080', '#828282']);
+    p.palette[1].locked = true;
+    const r = cleanUp(p, { similar: 2, rare: 0, patch: 0, smooth: 0 });
+    expect(r.pattern.palette.map((c) => c.id)).toEqual([2]);
   });
 });

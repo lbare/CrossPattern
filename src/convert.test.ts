@@ -3,7 +3,7 @@ import { hexToOklab, hexToRgb, rgbToOklab } from './color';
 import { Sampled, quantize } from './convert';
 import {
   Base, CARTOON0, FLAT0, LabelMap, NONE, REMOVE, areaIds, fillHoles, fillShape, findShapes, fillUnmarked, makeLabels,
-  combine, growMask, nextCartoonId, remapLabels, shapeMask, smartStroke, smoothMask, stamp, stampLine,
+  combine, growMask, nextCartoonId, remapLabels, shapeMask, smartStroke, smoothMask, snapBoundaries, stamp, stampLine,
 } from './marks';
 
 /** A sampled picture from rows of letters, each letter a color. '.' is transparent. */
@@ -217,5 +217,51 @@ describe('marking tools', () => {
     expect(sel[10 * 20 + 16]).toBe(0);
     expect(sel[10 * 20 + 10]).toBe(1);
     expect(sel[10 * 20 + 8]).toBe(1);
+  });
+});
+
+describe('snapping to edges', () => {
+  /** A noisy photo: dark red on the left of x = 40, brown on the right, as Oklab. */
+  function twoTone(w: number, h: number, edgeAt: (y: number) => number): Base {
+    const n = w * h, base: Base = { image: null as unknown as ImageData, L: new Float32Array(n), A: new Float32Array(n), B: new Float32Array(n) };
+    let seed = 7;
+    const noise = () => { seed = (seed * 16807) % 2147483647; return (seed / 2147483647 - 0.5) * 0.06; };
+    const red = rgbToOklab(...hexToRgb('#5a1a20')), brown = rgbToOklab(...hexToRgb('#7a5a3a'));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const c = x < edgeAt(y) ? red : brown, i = y * w + x;
+      base.L[i] = c[0] + noise(); base.A[i] = c[1] + noise() * 0.3; base.B[i] = c[2] + noise() * 0.3;
+    }
+    return base;
+  }
+  const edgeOf = (sel: Uint8Array, w: number, y: number) => { let x = 0; while (x < w && sel[y * w + x]) x++; return x; };
+
+  it('pulls a selection that spilled over an edge back onto it', () => {
+    const w = 120, h = 60, base = twoTone(w, h, () => 40), sel = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < 49; x++) sel[y * w + x] = 1; // 9 pixels too far
+    snapBoundaries(sel, base, w, h, null, 12);
+    for (const y of [10, 30, 50]) expect(Math.abs(edgeOf(sel, w, y) - 40)).toBeLessThanOrEqual(1);
+  });
+
+  it('pushes a selection that fell short out to the edge, and follows a slanted edge', () => {
+    const w = 120, h = 60, edge = (y: number) => 30 + Math.floor(y / 3), base = twoTone(w, h, edge), sel = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < 36; x++) sel[y * w + x] = 1;
+    snapBoundaries(sel, base, w, h, null, 12);
+    for (const y of [5, 20, 30, 45]) expect(Math.abs(edgeOf(sel, w, y) - edge(y))).toBeLessThanOrEqual(1);
+  });
+
+  it('leaves pixels alone where it is not allowed to change them', () => {
+    const w = 120, h = 60, base = twoTone(w, h, () => 40), sel = new Uint8Array(w * h), free = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < 49; x++) sel[y * w + x] = 1;
+    for (let i = 0; i < w * 30; i++) free[i] = 1; // top half only
+    snapBoundaries(sel, base, w, h, free, 12);
+    expect(Math.abs(edgeOf(sel, w, 10) - 40)).toBeLessThanOrEqual(1);
+    expect(edgeOf(sel, w, 50)).toBe(49);
+  });
+
+  it('settles the line between two marked areas', () => {
+    const w = 120, h = 60, base = twoTone(w, h, () => 40), m = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) m[y * w + x] = x < 47 ? CARTOON0 : CARTOON0 + 1;
+    snapBoundaries(m, base, w, h, null, 12);
+    for (const y of [10, 30, 50]) { let x = 0; while (m[y * w + x] === CARTOON0) x++; expect(Math.abs(x - 40)).toBeLessThanOrEqual(1); }
   });
 });

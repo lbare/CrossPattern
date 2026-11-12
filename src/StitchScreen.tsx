@@ -66,6 +66,23 @@ export function StitchScreen() {
   );
   const pickSection = (n: number) => { goSection(n); setSheet(null); };
   const session = Math.max(0, all.done - sessionStart);
+  const colorsFinished = colors.filter((c) => { const e = prog.get(c.id)!; return e.done >= e.total; }).length;
+  /** Progress over the whole pattern, every color together. */
+  const overall = (
+    <div className="overall">
+      <div className="line">
+        <b>Whole pattern</b>
+        <span className="muted">{pct(all.done, all.total)}%</span>
+      </div>
+      <Bar done={all.done} total={all.total} />
+      <div className="stats">
+        <span><b>{all.done.toLocaleString()}</b> of {all.total.toLocaleString()} stitches done</span>
+        <span><b>{(all.total - all.done).toLocaleString()}</b> to go</span>
+        <span><b>{colorsFinished}</b> of {colors.length} colors finished</span>
+        {session > 0 && <span><b>+{session.toLocaleString()}</b> this session</span>}
+      </div>
+    </div>
+  );
 
   if (!all.total) {
     return (
@@ -122,9 +139,12 @@ export function StitchScreen() {
         <button className="btn" onClick={closeStitch} title="Back to the editor">← <span className="label">Editor</span></button>
         <div className="title">
           <b>{p.name}</b>
-          <span className="muted">
-            {pct(all.done, all.total)}% · {all.done.toLocaleString()} of {all.total.toLocaleString()} stitched
+          <span className="muted long">
+            {pct(all.done, all.total)}% · {all.done.toLocaleString()} of {all.total.toLocaleString()} stitches done
             {session > 0 && <> · +{session.toLocaleString()} this session</>}
+          </span>
+          <span className="muted short">
+            {all.done.toLocaleString()} / {all.total.toLocaleString()} stitches · {pct(all.done, all.total)}%
           </span>
         </div>
         <div className="group">
@@ -142,12 +162,14 @@ export function StitchScreen() {
           <button className="btn help-btn" onClick={() => openDialog('help')} title="How this works">Help</button>
         </div>
         <button className={'btn icon phone-only' + (sheet === 'options' ? ' on' : '')} onClick={() => toggleSheet('options')} title="More" aria-label="More">⋯</button>
+        <span className="top-progress" style={{ width: `${all.total ? (all.done / all.total) * 100 : 0}%` }} aria-hidden />
       </header>
 
       <div className="stitch-main">
         <CanvasView />
         <aside className="stitch-side">
           <section className="dock">
+            {overall}
             {color && (
               <div className="current">
                 <Chip c={color} big />
@@ -208,7 +230,7 @@ export function StitchScreen() {
 
             <div className="tabs">
               <button className={showing === 'colors' ? 'on' : ''} onClick={() => { setTab('colors'); setSheet(sheet === 'colors' ? null : 'colors'); }}>
-                Colors <span className="muted">{colors.filter((c) => { const e = prog.get(c.id)!; return e.done >= e.total; }).length}/{colors.length}</span>
+                Colors <span className="muted">{colorsFinished}/{colors.length}</span>
               </button>
               <button className={showing === 'sections' ? 'on' : ''} onClick={() => { setTab('sections'); setSheet(sheet === 'sections' ? null : 'sections'); }}>
                 Sections <span className="muted">{sectionsDone}/{list.length}</span>
@@ -219,6 +241,7 @@ export function StitchScreen() {
           <section className="lists">
             {sheet === 'options' ? (
               <div className="options-sheet">
+                {overall}
                 {toggles}
                 <div className="row">
                   <button className={'btn' + (S.showSymbols ? ' on' : '')} onClick={() => setStitchSymbols(!S.showSymbols)}>Symbols</button>

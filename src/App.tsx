@@ -3,6 +3,7 @@ import { CanvasView } from './CanvasView';
 import { CONVERTING_KEY, ImportDialog } from './ImportDialog';
 import { PalettePanel } from './PalettePanel';
 import { ExportDialog, NewDialog, ResizeDialog } from './dialogs';
+import { CleanupDialog } from './cleanup';
 import { ProjectsDialog, ReconvertDialog } from './extras';
 import { GuideDialog } from './guide';
 import { StitchScreen } from './StitchScreen';
@@ -325,6 +326,8 @@ export function App() {
       {dialog === 'receive' && S.incoming && <ReceiveDialog text={S.incoming} onClose={() => { S.incoming = ''; setDialog(null); }} />}
       {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === 'resize' && <ResizeDialog onClose={() => setDialog(null)} />}
+      {dialog === 'cleanup' && <CleanupDialog onClose={() => setDialog(null)} />}
+      {dialog === 'cleanup-new' && <CleanupDialog afterConvert onClose={() => setDialog(null)} />}
     </div>
   );
 }

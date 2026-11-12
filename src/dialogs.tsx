@@ -4,7 +4,7 @@ import { printChart } from './print';
 import { renderExport } from './render';
 import { S, commitFloating, download, fileBase, openAsNewProject, resizePattern, trimEmpty } from './store';
 
-export function Modal(props: { title: string; onClose: () => void; children: ReactNode; size?: 'wide' | 'xl' }) {
+export function Modal(props: { title: string; onClose: () => void; children: ReactNode; size?: 'wide' | 'xl' | 'full' }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') props.onClose(); };
     window.addEventListener('keydown', onKey);

@@ -58,7 +58,7 @@ picture in full. **Mirror** in the top bar repeats everything you paint on the o
 
 Press **Convert picture** and choose, drop or paste an image.
 
-![Converting a photo: three areas, the background removed, and part of the kitten selected](docs/convert.png)
+![Converting a photo: the cat and the roof are areas, and part of the wall is selected](docs/convert.png)
 
 1. **Crop and size.** Type the width and height in stitches. The crop box takes that shape; drag it or a corner
    to choose what goes in. You see the total stitch count and the finished size on your fabric count.
@@ -66,11 +66,17 @@ Press **Convert picture** and choose, drop or paste an image.
 
    **Select** with any of three tools. The selection shows in blue.
    - **Shapes**: the photo is split into its obvious shapes for you. Click one, or drag across several.
-   - **Smart brush**: paint roughly along something and the brush follows its real edges.
+   - **Smart brush**: paint roughly along something and the brush follows its real edges. Its size is measured
+     on screen, so zooming in gives a finer brush; `[` and `]` change it.
    - **Lasso**: draw around something.
 
    Every tool adds to the selection, or takes away with "Take away" chosen. Shift always adds and Alt always
-   takes away. Smooth, Grow, Shrink, Fill gaps and Invert tidy the selection.
+   takes away. When a stroke ends, its edge **snaps** onto the nearest real edge in the photo, for adding and
+   taking away alike. Snap edges, Smooth, Grow, Shrink, Fill gaps and Invert tidy the selection.
+
+   The **Eraser** unmarks part of an area directly: it only erases the area you start on, following the
+   photo's edges. **Snap area edges** moves the lines between finished areas back onto the photo's edges where
+   one has strayed into the next.
 
    **Then say what it is**:
    - **New area**: one thing in the picture (the cat, the roof, a wall). Each area has colors of its own and
@@ -81,7 +87,13 @@ Press **Convert picture** and choose, drop or paste an image.
 
    Then set how many colors the unmarked parts get, how strongly to flatten them, and how much to clear stray
    stitches. "Adjust the photo" lifts shadows and changes brightness, contrast and color strength first.
-   Pinch or ⌘/Ctrl-scroll over the photo to zoom in for small features.
+   Pinch or ⌘/Ctrl-scroll over the photo to zoom in for small features. The window fills the screen, and
+   Photo / Both / Pattern chooses what to show, so one picture can have all the room.
+3. **Clean up.** Creating the pattern offers to merge look-alike colors, drop rarely used ones, absorb small
+   patches and smooth jagged edges, ringing every stitch that would change before anything does. Skip it if you
+   like: it is also under Simplify as **Clean up…**, and Undo reverses it.
+
+   ![Clean up after converting: every stitch that would change is ringed](docs/cleanup.png)
 
 The conversion is saved as you work: close the window or refresh the page and it is still there. A pattern
 also remembers the conversion it came from, so "Edit conversion" in the right panel reopens it later.
@@ -101,7 +113,7 @@ area has its own colors, a subject in shadow is not drowned out by a busy backgr
   its surroundings, Grow and Shrink move its edge by one stitch, and Smooth edge trims jagged corners.
 - **Re-convert**: select an area and press Re-convert to convert just that part of the photo again.
 - **Lock** a color so no tool can paint over it while you work around it.
-- **Simplify**: reduce to a number of colors, remove stray stitches everywhere, or add an outline around the
+- **Simplify**: Clean up… (see above), reduce to a number of colors, remove stray stitches everywhere, or add an outline around the
   design as backstitch or stitches.
 - Click the canvas size in the top bar to resize the canvas or trim empty edges.
 
@@ -119,8 +131,10 @@ people stitch: one color at a time, and one section of that color at a time.
   between them, and **Section done** ticks a whole section and moves to the next unfinished one.
 - **Tick single stitches** by tapping or clicking them; again to untick. On a computer, drag across several or
   Shift-click a whole section. Ticked stitches are faded and crossed out, and Undo takes back a tick.
-- **Finish a color** and Next color moves on to the next one with stitches left. Progress per color and for the
-  whole pattern is always showing.
+- **Finish a color** and Next color moves on to the next one with stitches left.
+- **See the whole pattern's progress**: stitches done out of the total, how many to go, colors finished and
+  stitches done this session, with a line along the top that fills as you go. On a phone the total sits under
+  the pattern name and the full figures are in the ⋯ menu.
 - **Pick up where you left off**: progress is saved as you tick, the color and section you were on are remembered
   for each project, and if you leave the site on the stitch screen it opens there next time.
 
@@ -209,8 +223,9 @@ It is a Vite + React + TypeScript app with no backend and no runtime dependencie
 | `src/CanvasView.tsx` | The drawing surface: rendering, pointer handling, and all the tools. |
 | `src/render.ts` | Drawing a pattern to a canvas, for the screen, PNG export and print pages. |
 | `src/convert.ts` | Picture conversion: sampling, shadow lifting, edge-preserving smoothing, cartoon areas, k-means color reduction. |
-| `src/marks.ts` | Working on a photo before conversion: shape detection, the smart brush, selections and areas. |
+| `src/marks.ts` | Working on a photo before conversion: shape detection, the smart brush, snapping to edges, selections and areas. |
 | `src/ImportDialog.tsx` | The two-step picture conversion dialog. |
+| `src/cleanup.tsx` | The Clean up dialog (the tidying itself is `cleanUp` in `src/model.ts`). |
 | `src/StitchScreen.tsx`, `src/stitch.ts` | The stitch screen, and working through colors and sections. |
 | `src/PalettePanel.tsx` | The right-hand panel: guide picture, colors, simplify tools, progress. |
 | `src/extras.tsx`, `src/dialogs.tsx`, `src/guide.tsx` | Projects, re-convert, export, resize and the built-in guide. |

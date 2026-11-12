@@ -3,7 +3,7 @@ import { clamp, hslToHex, rgbToHex } from './color';
 import { ProjectRecord, deleteProject, getProject, listProjects, putProject } from './db';
 import { FABRIC, buildCellImage } from './render';
 import {
-  Backstitch, MAX_SIZE, PaletteColor, Pattern, Reference, contentBounds, createPattern, cropped, deserialize, edgesOf, despeckle, mergeColor,
+  Backstitch, CleanupOptions, MAX_SIZE, PaletteColor, cleanUp, Pattern, Reference, contentBounds, createPattern, cropped, deserialize, edgesOf, despeckle, mergeColor,
   outlineCells, outlineEdges,
   nextId, nextSymbol, reduceColors, removeColor, removeUnused, resized, serialize,
 } from './model';
@@ -639,6 +639,19 @@ export function removeStrays(level: number): number {
   }
   if (n > 0) emit(); else dropUndo();
   return Math.max(0, n);
+}
+
+/** Tidies the pattern with the cleanup settings (see cleanUp), as one undoable step. */
+export function applyCleanup(o: CleanupOptions): number {
+  commitFloating();
+  const r = cleanUp(S.pattern, o);
+  if (!r.count) return 0;
+  pushUndo();
+  S.patch = null;
+  S.pattern = r.pattern;
+  fixCurrentColor();
+  emit();
+  return r.count;
 }
 
 export function removeUnusedColors(): void {

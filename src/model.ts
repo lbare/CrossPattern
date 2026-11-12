@@ -483,3 +483,132 @@ export function colorSections(p: Pattern, color: number): { list: Section[]; at:
   list.forEach((s, k) => { for (const j of s.cells) at[j] = k; });
   return { list, at };
 }
+
+// ---- Cleaning up a converted pattern ------------------------------------
+
+export interface CleanupOptions {
+  /** 0-10: merge colors that look this alike (0 is off). */
+  similar: number;
+  /** Colors with fewer stitches than this are merged into the closest other color (0 is off). */
+  rare: number;
+  /** Patches of one color smaller than this many stitches take the color around them (0 is off). */
+  patch: number;
+  /** 0-3: smooth jagged edges and stray stitches. */
+  smooth: number;
+}
+
+/** Turns the "look alike" setting into a distance between colors (Oklab). */
+export const similarDistance = (level: number) => level * 0.012;
+
+/**
+ * Tidies a pattern after conversion, on a copy: colors that look alike are merged, rarely used colors
+ * go, small patches take the color around them and jagged edges are smoothed. Locked colors are never
+ * changed, though other colors may merge into them. Returns the tidied copy and how many squares changed.
+ */
+export function cleanUp(src: Pattern, o: CleanupOptions): { pattern: Pattern; changed: Uint8Array; count: number } {
+  const p: Pattern = {
+    ...src, cells: src.cells.slice(), palette: src.palette.map((c) => ({ ...c })),
+    backstitches: src.backstitches.map((b) => ({ ...b })), done: src.done?.slice(),
+  };
+  const locked = new Set(p.palette.filter((c) => c.locked).map((c) => c.id));
+  const lab = new Map(p.palette.map((c) => [c.id, hexToOklab(c.hex)]));
+  const dist = (a: number, b: number) => {
+    const x = lab.get(a)!, y = lab.get(b)!;
+    return Math.sqrt((x[0] - y[0]) ** 2 + (x[1] - y[1]) ** 2 + (x[2] - y[2]) ** 2);
+  };
+  const merge = (from: number, to: number) => { mergeColor(p, from, to); };
+
+  // Colors that look alike: the less used one merges into the other, closest pairs first.
+  if (o.similar > 0) {
+    const limit = similarDistance(o.similar);
+    for (;;) {
+      const counts = countCells(p), ids = p.palette.map((c) => c.id).filter((id) => counts.has(id));
+      let best: [number, number] | null = null, bestD = limit;
+      for (let a = 0; a < ids.length; a++) for (let b = a + 1; b < ids.length; b++) {
+        if (locked.has(ids[a]) && locked.has(ids[b])) continue;
+        const d = dist(ids[a], ids[b]);
+        if (d < bestD) { bestD = d; best = [ids[a], ids[b]]; }
+      }
+      if (!best) break;
+      let [from, to] = (counts.get(best[0]) ?? 0) < (counts.get(best[1]) ?? 0) ? best : [best[1], best[0]];
+      if (locked.has(from)) [from, to] = [to, from];
+      merge(from, to);
+    }
+  }
+
+  // Colors hardly used at all: each goes into the closest color that stays.
+  if (o.rare > 0) {
+    const counts = countCells(p);
+    const rare = p.palette.filter((c) => !c.locked && counts.has(c.id) && counts.get(c.id)! < o.rare)
+      .sort((a, b) => counts.get(a.id)! - counts.get(b.id)!);
+    for (const c of rare) {
+      const others = p.palette.filter((d) => d.id !== c.id && counts.has(d.id) && (counts.get(d.id)! >= o.rare || d.locked));
+      if (!others.length) continue;
+      let near = others[0];
+      for (const d of others) if (dist(c.id, d.id) < dist(c.id, near.id)) near = d;
+      counts.set(near.id, counts.get(near.id)! + counts.get(c.id)!);
+      counts.delete(c.id);
+      merge(c.id, near.id);
+    }
+  }
+
+  if (o.patch > 1) mergeSmallPatches(p.cells, p.width, p.height, o.patch, locked);
+  if (o.smooth > 0) {
+    const before = p.cells.slice();
+    despeckle(p.cells, p.width, p.height, o.smooth);
+    for (let i = 0; i < before.length; i++) if (locked.has(before[i])) p.cells[i] = before[i];
+  }
+
+  removeUnused(p);
+  const changed = new Uint8Array(p.cells.length);
+  let count = 0;
+  for (let i = 0; i < changed.length; i++) {
+    if (p.cells[i] !== src.cells[i]) {
+      changed[i] = 1;
+      count++;
+      if (p.done && !p.cells[i]) p.done[i] = 0;
+    }
+  }
+  return { pattern: p, changed, count };
+}
+
+/**
+ * Patches of one color (squares joined side by side) smaller than `minSize` take the color they share the
+ * most border with, smallest patches first. Empty fabric counts as a color here, so specks floating in
+ * the background go and pinholes in the design fill in. Returns how many squares changed.
+ */
+export function mergeSmallPatches(cells: Uint16Array, w: number, h: number, minSize: number, locked = new Set<number>()): number {
+  const n = w * h, patchOf = new Int32Array(n).fill(-1), patches: number[][] = [];
+  for (let s = 0; s < n; s++) {
+    if (patchOf[s] >= 0) continue;
+    const v = cells[s], list = [s], id = patches.length;
+    patchOf[s] = id;
+    for (let k = 0; k < list.length; k++) {
+      const i = list[k], x = i % w;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i >= w ? i - w : -1, i < n - w ? i + w : -1]) {
+        if (j >= 0 && patchOf[j] < 0 && cells[j] === v) { patchOf[j] = id; list.push(j); }
+      }
+    }
+    patches.push(list);
+  }
+  let changed = 0;
+  const order = patches.map((_, k) => k).filter((k) => patches[k].length < minSize).sort((a, b) => patches[a].length - patches[b].length);
+  const tally = new Map<number, number>();
+  for (const k of order) {
+    const list = patches[k], v = cells[list[0]];
+    if (locked.has(v)) continue;
+    tally.clear();
+    for (const i of list) {
+      const x = i % w;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i >= w ? i - w : -1, i < n - w ? i + w : -1]) {
+        if (j >= 0 && cells[j] !== v) tally.set(cells[j], (tally.get(cells[j]) ?? 0) + 1);
+      }
+    }
+    let best = -1, bestN = 0;
+    for (const [u, c] of tally) if (c > bestN) { best = u; bestN = c; }
+    if (best < 0) continue;
+    for (const i of list) cells[i] = best;
+    changed += list.length;
+  }
+  return changed;
+}
