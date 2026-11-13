@@ -660,3 +660,10 @@ details.thread-card[open] { gap: 6px; }
 /* ---- Stitch screen: choosing where to start ---- */
 .start-links { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
 .start-bar { border-color: #16a34a; }
+
+/* ---- Stitch screen: the side panel scrolls as a whole when it is taller than the window ---- */
+@media (min-width: 761px) {
+  .stitch-side { overflow-y: auto; overscroll-behavior: contain; }
+  .stitch .dock { flex: none; }
+  .stitch .lists { flex: 1 0 auto; min-height: auto; overflow: visible; }
+}
