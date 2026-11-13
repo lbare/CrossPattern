@@ -113,6 +113,8 @@ area has its own colors, a subject in shadow is not drowned out by a busy backgr
   its surroundings, Grow and Shrink move its edge by one stitch, and Smooth edge trims jagged corners.
 - **Re-convert**: select an area and press Re-convert to convert just that part of the photo again.
 - **Lock** a color so no tool can paint over it while you work around it.
+- **Remove backstitch** (under Simplify): remove the backstitch lines in the current color, such as an outline,
+  or all of them.
 - **Simplify**: Clean up… (see above), reduce to a number of colors, remove stray stitches everywhere, or add an outline around the
   design as backstitch or stitches.
 - Click the canvas size in the top bar to resize the canvas or trim empty edges.

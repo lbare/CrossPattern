@@ -43,7 +43,7 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
       ['Highlight', 'Fades every other color so you can see exactly where one color is used.'],
       ['Lock', 'A locked color cannot be painted over by any tool. Lock the parts you are happy with before cleaning up around them.'],
       ['Merge into', 'Replaces the selected color everywhere with another color and removes it from the palette.'],
-      ['Simplify', 'Clean up… merges look-alike and rarely used colors, absorbs small patches and smooths edges, with a preview first. Reduce to N colors merges the least-used colors into their nearest neighbours. Remove stray stitches clears isolated stitches across the whole pattern. Outline adds a border around the design, as backstitch or as stitches.'],
+      ['Simplify', 'Clean up… merges look-alike and rarely used colors, absorbs small patches and smooths edges, with a preview first. Reduce to N colors merges the least-used colors into their nearest neighbours. Remove stray stitches clears isolated stitches across the whole pattern. Outline adds a border around the design, as backstitch or as stitches. Remove backstitch takes away the backstitch lines in the current color (pick the color of the lines first, for example an outline) or all of them; Undo brings them back.'],
       ['Fabric color', 'Set the fabric color at the bottom of the panel to preview the design on dark or colored cloth. Empty squares show the fabric.'],
     ],
   },

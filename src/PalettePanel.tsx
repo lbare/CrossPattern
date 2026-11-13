@@ -4,7 +4,7 @@ import { SYMBOLS, countCells } from './model';
 import { FABRIC } from './render';
 import {
   RefMode, S, addColor, openDialog, addOutline, deleteColor, emit, loadReferencePhoto, mergeInto, reduceTo, removeReference,
-  clearProgress, removeStrays, removeUnusedColors, setColorHex, setColorSymbol, setFabric, sortPaletteByUse, toggleLock,
+  clearProgress, removeBackstitch, removeStrays, removeUnusedColors, setColorHex, setColorSymbol, setFabric, sortPaletteByUse, toggleLock,
   useStore,
 } from './store';
 
@@ -255,6 +255,26 @@ export function PalettePanel() {
             Stitches
           </button>
         </div>
+        {p.backstitches.length > 0 && (() => {
+          const mine = p.backstitches.filter((b) => b.colorId === S.colorId).length;
+          const lines = (n: number) => `${n} backstitch line${n === 1 ? '' : 's'}`;
+          return (
+            <div className="editor-row">
+              <label title={`${lines(p.backstitches.length)} in this pattern`}>Remove backstitch</label>
+              <button
+                className="btn small push"
+                disabled={!mine}
+                title={mine ? `Remove the ${lines(mine)} in the current color` : 'None in the current color: pick the color of the lines to remove'}
+                onClick={() => setNote(`Removed ${lines(removeBackstitch(S.colorId))}.`)}
+              >
+                This color{mine ? ` (${mine})` : ''}
+              </button>
+              <button className="btn small" title="Remove every backstitch line" onClick={() => setNote(`Removed ${lines(removeBackstitch())}.`)}>
+                All
+              </button>
+            </div>
+          );
+        })()}
         {note && <p className="note">{note}</p>}
       </div>
 

@@ -481,6 +481,18 @@ export function cropToSelection(): void {
   setPattern(cropped(S.pattern, r));
 }
 
+/** Removes backstitch: every line in one color, or all of it. Returns how many lines went. Undoable. */
+export function removeBackstitch(colorId?: number): number {
+  commitFloating();
+  const all = S.pattern.backstitches, keep = colorId === undefined ? [] : all.filter((b) => b.colorId !== colorId);
+  const gone = all.length - keep.length;
+  if (!gone) return 0;
+  pushUndo();
+  S.pattern.backstitches = keep;
+  emit();
+  return gone;
+}
+
 /** Outlines the subject in the current color, as backstitch along its edge or as its outermost stitches. */
 export function addOutline(kind: 'backstitch' | 'stitches'): number {
   if (!S.colorId) return 0;
