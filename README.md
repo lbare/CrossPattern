@@ -149,6 +149,15 @@ cross over them.
 On a computer, a label beside the mouse gives the column and row of the square under it (numbered like a printed
 chart), with its color and whether it is stitched. ← and → move between sections and Enter ticks the current one off.
 
+**Stitching order** (O, or the ⋯ menu on a phone) draws arrows showing how to work the current section: where to
+start, each row in turn with its direction, where to step down to the next row, and where the thread should be
+finished off rather than carried more than three squares behind. Rows go from the top down (columns for tall thin
+shapes), worked "there and back" (half stitches along the row, then back crossing them) or one cross at a time. The
+panel describes the next row and **Row done** ticks it. The plan covers only the stitches not yet ticked and carries
+on from the last one you ticked, so stitches done out of order are planned around.
+
+![Stitching order: numbered rows from the top, with Start, End and the next row in purple](docs/stitch-order.png)
+
 **Measure** (M, or the ⋯ menu on a phone) counts the squares between two points: click where to measure from and
 where to measure to, or drag between them, and it shows a path with the answer, such as "12 right, 6 down". When
 starting a new section, "How far is it from my stitches?" measures from the nearest stitch you have already done to

@@ -67,6 +67,9 @@ export const S = {
   /** On the stitch screen: measuring the distance between two squares. `a` is where it starts, `b` where it ends,
    *  and `fixed` is true once both ends are chosen (until then `b` follows the mouse). */
   measuring: false,
+  /** On the stitch screen: arrows showing the order to stitch the current section in, and how it is worked. */
+  orderGuide: false,
+  orderMethod: 'rows' as 'rows' | 'single',
   measure: null as { a: { x: number; y: number }; b: { x: number; y: number }; fixed: boolean } | null,
   /** A rectangle to bring into view as soon as a newly shown canvas knows its size. */
   pendingRect: null as Rect | null,

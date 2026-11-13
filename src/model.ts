@@ -612,3 +612,93 @@ export function mergeSmallPatches(cells: Uint16Array, w: number, h: number, minS
   }
   return changed;
 }
+
+// ---- The order to stitch a section in -------------------------------------
+
+/**
+ * How a section is worked. "rows" is the Danish method: half stitches all along a row, then back along
+ * the same row to cross them, so each row ends where it began. "single" is the English method: each
+ * cross is finished before the next, snaking back and forth.
+ */
+export type StitchMethod = 'rows' | 'single';
+
+/** One row (or column) of a section, with its squares in the order they are stitched. */
+export interface Run { cells: number[]; vertical: boolean }
+
+/** Further than this many squares, the thread should be finished off and started again rather than carried behind. */
+export const MAX_CARRY = 3;
+
+/**
+ * Plans the order to stitch a section in, the way stitchers usually do: in rows from the top down,
+ * starting at the top left, each row beginning at whichever end is nearest the thread. Tall, thin shapes
+ * are worked in columns instead. Rows that are moved to by going back up are avoided where possible,
+ * so the hand does not rub over finished stitches.
+ *
+ * `cells` are the squares still to stitch, so stitches already done, in any order, are simply left out
+ * and a row broken by them becomes two. With `from` (a square where the thread is now), the plan starts
+ * from the nearest row to it instead of the top left.
+ */
+export function stitchRoute(cells: number[], width: number, method: StitchMethod, from = -1): Run[] {
+  if (!cells.length) return [];
+  const set = new Set(cells);
+  const X = (i: number) => i % width, Y = (i: number) => (i / width) | 0;
+  const runsOf = (vertical: boolean) => {
+    const step = vertical ? width : 1, out: number[][] = [];
+    const sorted = [...cells].sort(vertical ? (a, b) => X(a) - X(b) || Y(a) - Y(b) : (a, b) => a - b);
+    for (const i of sorted) {
+      // Only start a run at a square with nothing before it in the same row (or column).
+      const before = i - step;
+      if (vertical ? set.has(before) : X(i) > 0 && set.has(before)) continue;
+      const run = [i];
+      for (let j = i + step; vertical ? set.has(j) : X(j) > X(j - 1) && set.has(j); j += step) run.push(j);
+      out.push(run);
+    }
+    return out;
+  };
+  const rows = runsOf(false), cols = runsOf(true);
+  // Columns only when they are clearly the longer way: a thin upright line, a tall narrow patch.
+  const vertical = cols.length * 1.5 <= rows.length;
+  const pool = vertical ? cols : rows;
+  const used = new Uint8Array(pool.length), out: Run[] = [];
+  // Distance to move the thread, with going back up (or back left, for columns) counted as costing more.
+  const cost = (from: number, to: number) => {
+    const dx = X(to) - X(from), dy = Y(to) - Y(from);
+    const back = vertical ? Math.max(0, -dx) : Math.max(0, -dy);
+    return Math.abs(dx) + Math.abs(dy) + back * 3;
+  };
+  let k = 0, forward = true;
+  if (from >= 0) {
+    let bestCost = Infinity;
+    pool.forEach((run, r) => {
+      const ca = cost(from, run[0]), cb = cost(from, run[run.length - 1]);
+      if (ca < bestCost) { bestCost = ca; k = r; forward = true; }
+      if (cb < bestCost) { bestCost = cb; k = r; forward = false; }
+    });
+  }
+  for (;;) {
+    used[k] = 1;
+    const run = forward ? pool[k] : [...pool[k]].reverse();
+    out.push({ cells: run, vertical });
+    // Where the thread is now: back at the start of a row worked there and back, or at its far end.
+    const at = method === 'rows' ? run[0] : run[run.length - 1];
+    let best = -1, bestCost = Infinity, bestForward = true;
+    for (let r = 0; r < pool.length; r++) {
+      if (used[r]) continue;
+      const a = pool[r][0], b = pool[r][pool[r].length - 1];
+      const ca = cost(at, a), cb = cost(at, b);
+      if (ca < bestCost) { bestCost = ca; best = r; bestForward = true; }
+      if (cb < bestCost) { bestCost = cb; best = r; bestForward = false; }
+    }
+    if (best < 0) break;
+    k = best;
+    forward = bestForward;
+  }
+  return out;
+}
+
+/** Where the thread is after a run: back at its start for rows worked there and back, otherwise at its end. */
+export const threadAfter = (run: Run, method: StitchMethod) => (method === 'rows' ? run.cells[0] : run.cells[run.cells.length - 1]);
+
+/** How far the thread moves between two squares, in squares (a diagonal step counts as one). */
+export const carry = (from: number, to: number, width: number) =>
+  Math.max(Math.abs((from % width) - (to % width)), Math.abs(((from / width) | 0) - ((to / width) | 0)));

@@ -611,3 +611,19 @@ button { touch-action: manipulation; }
   .measure-bar { bottom: 6px; font-size: 12px; }
   .measure-bar .muted { display: none; }
 }
+
+/* ---- Stitch screen: the order to stitch a section in ---- */
+.order-card { display: grid; gap: 4px; padding: 10px; border: 1px solid #7c3aed; border-radius: 8px; background: color-mix(in srgb, #7c3aed 8%, transparent); font-size: 12px; }
+.order-card .line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.order-card select { height: 24px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 12px; }
+.order-card .step { font-size: 13px; font-weight: 600; color: var(--text); }
+.order-card .jump { color: #f97316; font-weight: 600; }
+.order-card .btn { justify-self: start; margin-top: 4px; }
+.order-strip { display: none; }
+@media (max-width: 760px) {
+  .order-strip {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; background: var(--surface);
+    border-top: 2px solid #7c3aed;
+  }
+  .order-strip .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

@@ -1,5 +1,5 @@
 /** Working through a pattern: one color at a time, one section of that color at a time. */
-import { Section, colorSections, connectedCells } from './model';
+import { MAX_CARRY, Run, Section, StitchMethod, carry, colorSections, connectedCells, stitchRoute, threadAfter } from './model';
 import { S, doneMap, emit, fitView, pushUndo, showRect } from './store';
 
 // ---- Sections of the color being worked ---------------------------------
@@ -130,10 +130,13 @@ export function tickable(i: number): boolean {
 /** After squares are ticked on the canvas: the section they are in becomes the current one. */
 export function ticked(i: number): void {
   if (S.screen !== 'stitch' || S.pattern.cells[i] !== S.stitchColor) return;
-  if (S.stitchCell >= 0 && sections().at[S.stitchCell] === sections().at[i]) return;
-  S.stitchCell = i;
-  outline();
-  remember();
+  if (!(S.stitchCell >= 0 && sections().at[S.stitchCell] === sections().at[i])) {
+    S.stitchCell = i;
+    outline();
+    remember();
+  }
+  // The thread is where the last stitch was made, so the plan for what is left carries on from here.
+  threadAt(i);
 }
 
 /** The whole section a square is in, for ticking a patch at once. */
@@ -193,6 +196,11 @@ function enterStitch(): void {
   let saved: { color?: number; cell?: number; only?: boolean } = {};
   try { saved = JSON.parse(localStorage.getItem('crosspattern.stitch.' + S.projectId) ?? '{}'); } catch { /* none */ }
   S.onlyFocus = saved.only ?? true;
+  try {
+    const o = JSON.parse(localStorage.getItem('crosspattern.order') ?? '{}');
+    S.orderGuide = !!o.on;
+    S.orderMethod = o.method === 'single' ? 'single' : 'rows';
+  } catch { /* none */ }
   const prog = progress();
   const color = saved.color && prog.has(saved.color) ? saved.color : nextColor() || S.pattern.palette.find((c) => prog.has(c.id))?.id || 0;
   S.stitchColor = color;
@@ -324,4 +332,122 @@ export function measureToSection(): boolean {
   const x0 = Math.min(ax, sx), y0 = Math.min(ay, sy);
   showRect({ x: x0 - 2, y: y0 - 2, w: Math.abs(ax - sx) + 5, h: Math.abs(ay - sy) + 5 });
   return true;
+}
+
+// ---- The order to stitch a section in -------------------------------------
+
+function saveOrder(): void {
+  try { localStorage.setItem('crosspattern.order', JSON.stringify({ on: S.orderGuide, method: S.orderMethod })); } catch { /* blocked */ }
+}
+
+export function setOrderGuide(on: boolean): void {
+  S.orderGuide = on;
+  saveOrder();
+  emit(false);
+}
+
+export function setOrderMethod(m: StitchMethod): void {
+  S.orderMethod = m;
+  saveOrder();
+  emit(false);
+}
+
+let routeCache: { key: string; runs: Run[] } | null = null;
+/** Where the thread is: the square last ticked in the section being worked, or -1 before anything is. */
+let thread = { section: '', at: -1 };
+
+const sectionKey = () => {
+  const sec = sections().list[currentSection()];
+  return sec ? `${S.projectId}:${S.stitchColor}:${sec.cells[0]}:${sec.cells.length}` : '';
+};
+
+/** Remembers where the thread is, so the plan for what is left carries on from there. */
+function threadAt(i: number): void {
+  thread = { section: sectionKey(), at: i };
+}
+
+/**
+ * The current section's rows still to stitch, in order. Only squares not yet ticked are planned, so
+ * stitches done out of order, or a section half finished some other way, are fine: the plan covers what
+ * is left, starting from where the thread last was. Empty when no section is chosen or it is all done.
+ */
+export function route(): Run[] {
+  const k = currentSection(), sec = sections().list[k];
+  if (!sec) return [];
+  const done = S.pattern.done, left = done ? sec.cells.filter((i) => !done[i]) : sec.cells;
+  const from = thread.section === sectionKey() ? thread.at : -1;
+  let sig = 0;
+  for (const i of left) sig = (sig * 31 + i) | 0;
+  const key = `${sectionKey()}:${left.length}:${sig}:${from}:${S.orderMethod}`;
+  if (routeCache?.key !== key) routeCache = { key, runs: stitchRoute(left, S.pattern.width, S.orderMethod, from) };
+  return routeCache.runs;
+}
+
+/** The row to stitch next (always the first of what is left), or -1 when nothing is. */
+export function currentRun(): number {
+  return route().length ? 0 : -1;
+}
+
+/**
+ * How the thread gets from one row to the next. A step is to the next row; a carry is a short way
+ * across the back; "under" is a longer way that only passes over stitches already done, so the thread
+ * can be slipped under them on the back; a jump is too far, and needs a new thread.
+ */
+export function moveBetween(from: number, to: number, passed?: Set<number>): { kind: 'step' | 'carry' | 'under' | 'jump'; d: number } {
+  const p = S.pattern, w = p.width, d = carry(from, to, w);
+  if (d <= 1) return { kind: 'step', d };
+  if (d <= MAX_CARRY) return { kind: 'carry', d };
+  // Check every square on the straight way across, not counting the two ends.
+  const x0 = from % w, y0 = (from / w) | 0, x1 = to % w, y1 = (to / w) | 0;
+  let under = true;
+  for (let s = 1; s < d && under; s++) {
+    const x = Math.round(x0 + ((x1 - x0) * s) / d), y = Math.round(y0 + ((y1 - y0) * s) / d), i = y * w + x;
+    // Done already, or done by then: earlier rows of the plan will be finished by the time the thread gets here.
+    if (!p.cells[i] || !(p.done?.[i] || passed?.has(i))) under = false;
+  }
+  return { kind: under ? 'under' : 'jump', d };
+}
+
+/** Ticks off one row of the plan. When that finishes the section, moves on to the next unfinished one. */
+export function runDone(k: number): void {
+  const runs = route(), run = runs[k];
+  if (!run) return;
+  pushUndo();
+  const done = doneMap();
+  for (const i of run.cells) done[i] = 1;
+  threadAt(threadAfter(run, S.orderMethod));
+  emit();
+  if (currentRun() < 0) nextUnfinished();
+}
+
+/** A plain description of one row of the plan and what comes after it. */
+export function describeRun(k: number): { title: string; left: number; how: string; then: string; jump: boolean } {
+  const runs = route(), run = runs[k], w = S.pattern.width, m = S.orderMethod;
+  if (!run) return { title: '', left: 0, how: '', then: '', jump: false };
+  const a = run.cells[0], b = run.cells[run.cells.length - 1], n = run.cells.length;
+  const ax = (a % w) + 1, ay = ((a / w) | 0) + 1, bx = (b % w) + 1, by = ((b / w) | 0) + 1;
+  const word = run.vertical ? 'Column' : 'Row';
+  const there = run.vertical ? (by > ay ? 'down' : 'up') : bx > ax ? 'left to right' : 'right to left';
+  const back = run.vertical ? (by > ay ? 'up' : 'down') : bx > ax ? 'right to left' : 'left to right';
+  const where = n === 1 ? `column ${ax}, row ${ay}` : run.vertical ? `column ${ax}, rows ${ay} to ${by}` : `row ${ay}, columns ${ax} to ${bx}`;
+  const left = runs.length - k;
+  const title = `${n} stitch${n === 1 ? '' : 'es'}, ${where}`;
+  const how = n === 1
+    ? 'A single cross: stitch it in full.'
+    : m === 'rows'
+      ? `Work the half stitches ${there}, then come back ${back} crossing each one.`
+      : `Finish each cross before the next, working ${there}.`;
+  const next = runs[k + 1];
+  if (!next) return { title, left, how, then: 'That is the last of this section.', jump: false };
+  const passed = new Set(runs.slice(0, k + 1).flatMap((r) => r.cells));
+  const { kind, d } = moveBetween(threadAfter(run, m), next.cells[0], passed);
+  const jump = kind === 'jump', next_ = `the next ${word.toLowerCase()}`;
+  const then = kind === 'jump'
+    ? `${next_[0].toUpperCase() + next_.slice(1)} is ${d} squares away: finish off the thread and start again there, rather than carrying it across the back.`
+    : kind === 'under'
+      ? `Then slip the thread under the finished stitches on the back, ${d} squares over to ${next_}.`
+      : kind === 'step'
+        ? `Then step ${run.vertical ? 'across' : 'down'} to ${next_}.`
+        : `Then carry the thread ${d} squares to ${next_}.`;
+  return { title, left, how, then, jump };
 }

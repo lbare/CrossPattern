@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { clamp, hexToRgb, inkFor, rgbToHex } from './color';
 import {
-  currentSection, describeDistance, measureClick, measureMove, measureRelease, sectionCells, sections, tickable, ticked,
+  currentRun, currentSection, describeDistance, measureClick, measureMove, measureRelease, moveBetween, route, sectionCells, sections, tickable, ticked,
 } from './stitch';
-import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
+import { floodFill, linePoints, nextId, nextSymbol, replaceAll, threadAfter, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
   S, Tool, PatchAction, addColor, clearPatch, patchAction, selectPatch, selectSameColors, commitFloating, copySelection, cropToSelection, cutSelection, deleteSelection, doneMap, dropUndo, emit,
@@ -269,6 +269,8 @@ export function CanvasView() {
         ctx.lineWidth = 2; ctx.strokeStyle = '#e11d74'; ctx.stroke(edge);
       }
 
+      if (S.stitchMode && S.orderGuide && scale >= 4) drawOrder(scale);
+
       const m = S.stitchMode && S.measuring ? S.measure : null;
       if (m && inside(m.a.x, m.a.y) && inside(m.b.x, m.b.y)) {
         // The measurement: both squares ringed, and an L-shaped path between them, across then down,
@@ -342,6 +344,121 @@ export function CanvasView() {
       }
       ctx.restore();
     }
+
+    /**
+     * The order to stitch the current section in: a numbered arrow along each row, a dotted line for each
+     * move to the next row (orange where the thread should be finished off rather than carried), Start and
+     * End markers, and the row to do next drawn boldly with its way back shown.
+     */
+    const drawOrder = (scale: number) => {
+      const runs = route();
+      if (!runs.length) return;
+      const p = S.pattern, w = p.width, method = S.orderMethod, now = currentRun();
+      const cx = (i: number) => ((i % w) + 0.5) * scale, cy = (i: number) => (((i / w) | 0) + 0.5) * scale;
+      const finished = (k: number) => runs[k].cells.every((i) => p.done?.[i]);
+      const head = (x0: number, y0: number, x1: number, y1: number, size: number) => {
+        const a = Math.atan2(y1 - y0, x1 - x0);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1 - size * Math.cos(a - 0.5), y1 - size * Math.sin(a - 0.5));
+        ctx.lineTo(x1 - size * Math.cos(a + 0.5), y1 - size * Math.sin(a + 0.5));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      };
+      const badge = (text: string, x: number, y: number, fill: string) => {
+        ctx.font = `600 ${Math.round(clamp(scale * 0.42, 10, 13))}px system-ui, sans-serif`;
+        const bw = Math.max(ctx.measureText(text).width + 10, 18), bh = clamp(scale * 0.6, 15, 19);
+        ctx.fillStyle = fill;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect(x - bw / 2, y - bh / 2, bw, bh, bh / 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(text, x, y + 0.5);
+        ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+      };
+      const INK = '#1b1b1f', NOW = '#7c3aed', JUMP = '#f97316', START = '#16a34a';
+
+      // Moves between rows, underneath everything else.
+      ctx.lineCap = 'round';
+      const passed = new Set<number>();
+      for (let k = 0; k + 1 < runs.length; k++) {
+        for (const i of runs[k].cells) passed.add(i);
+        const from = threadAfter(runs[k], method), to = runs[k + 1].cells[0];
+        const { kind } = moveBetween(from, to, passed), jump = kind === 'jump';
+        ctx.globalAlpha = finished(k + 1) ? 0.3 : 1;
+        ctx.setLineDash([Math.max(2, scale * 0.15), Math.max(3, scale * 0.2)]);
+        ctx.lineWidth = Math.max(1.5, scale * 0.08);
+        ctx.strokeStyle = jump ? JUMP : 'rgba(27,27,31,0.7)';
+        ctx.beginPath();
+        // A short move turns the corner square by square; a long one goes straight.
+        const short = kind === 'step' || kind === 'carry';
+        ctx.moveTo(cx(from), cy(from));
+        if (short && runs[k].vertical) ctx.lineTo(cx(to), cy(from)); else if (short) ctx.lineTo(cx(from), cy(to));
+        ctx.lineTo(cx(to), cy(to));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (jump && scale >= 10) {
+          const mx = (cx(from) + cx(to)) / 2, my = (cy(from) + cy(to)) / 2;
+          badge('✂ new thread', mx, my, JUMP);
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      // Each row: an arrow from its first stitch to its last.
+      runs.forEach((run, k) => {
+        const a = run.cells[0], b = run.cells[run.cells.length - 1], isNow = k === now;
+        ctx.globalAlpha = finished(k) ? 0.3 : 1;
+        const lw = isNow ? Math.max(3, scale * 0.16) : Math.max(1.5, scale * 0.09);
+        const size = isNow ? clamp(scale * 0.5, 7, 16) : clamp(scale * 0.38, 5, 12);
+        const color = isNow ? NOW : INK;
+        if (a === b) {
+          ctx.fillStyle = color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(cx(a), cy(a), Math.max(2.5, scale * (isNow ? 0.2 : 0.14)), 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        } else {
+          // Stop the shaft short of the last square's middle so the arrowhead points into it.
+          const len = Math.hypot(cx(b) - cx(a), cy(b) - cy(a)), ux = (cx(b) - cx(a)) / len, uy = (cy(b) - cy(a)) / len;
+          const ex = cx(b) + ux * scale * 0.3, ey = cy(b) + uy * scale * 0.3;
+          for (const [style, width] of [['#fff', lw + 2.5], [color, lw]] as const) {
+            ctx.strokeStyle = style; ctx.lineWidth = width;
+            ctx.beginPath(); ctx.moveTo(cx(a), cy(a)); ctx.lineTo(ex - ux * size * 0.6, ey - uy * size * 0.6); ctx.stroke();
+          }
+          ctx.fillStyle = color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+          head(cx(a), cy(a), ex, ey, size);
+          if (isNow && method === 'rows') {
+            // The way back along the same row, crossing each half stitch: a thinner arrow alongside.
+            const off = scale * 0.32, px = -uy * off, py = ux * off;
+            ctx.setLineDash([Math.max(3, scale * 0.25), Math.max(2, scale * 0.15)]);
+            ctx.strokeStyle = NOW; ctx.lineWidth = Math.max(1.5, scale * 0.07);
+            ctx.beginPath(); ctx.moveTo(cx(b) + px, cy(b) + py); ctx.lineTo(cx(a) + px - ux * scale * 0.1, cy(a) + py - uy * scale * 0.1); ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = NOW;
+            head(cx(b) + px, cy(b) + py, cx(a) + px - ux * scale * 0.3, cy(a) + py - uy * scale * 0.3, size * 0.75);
+          }
+        }
+        if (scale >= 14 || isNow) {
+          const bx = cx(a) - (run.vertical ? 0 : scale * 0.5), by = cy(a) - (run.vertical ? scale * 0.5 : 0);
+          badge(String(k + 1), bx, by, isNow ? NOW : INK);
+        }
+      });
+      ctx.globalAlpha = 1;
+
+      // Where to begin and where the section ends.
+      const first = runs[0].cells[0], last = threadAfter(runs[runs.length - 1], method);
+      ctx.lineWidth = 3; ctx.strokeStyle = '#fff';
+      ctx.strokeRect(((first % w)) * scale + 1, ((first / w) | 0) * scale + 1, scale - 2, scale - 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = START;
+      ctx.strokeRect(((first % w)) * scale + 1, ((first / w) | 0) * scale + 1, scale - 2, scale - 2);
+      if (scale >= 8) {
+        badge('Start', cx(first), cy(first) - scale * 0.5 - 12, START);
+        if ((runs.length > 1 || runs[0].cells.length > 1) && last !== first) badge('End', cx(last) + scale * 0.5, cy(last) - scale * 0.5 - 10, INK);
+      }
+      ctx.lineCap = 'butt';
+    };
 
     const pos = (e: MouseEvent) => {
       const r = canvas.getBoundingClientRect();

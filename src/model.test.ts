@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hexToRgb, inkFor, oklabToRgb, rgbToHex, rgbToOklab } from './color';
 import {
-  Pattern, cleanUp, colorSections, connectedCells, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints, mergeSmallPatches,
+  MAX_CARRY, Pattern, carry, cleanUp, colorSections, stitchRoute, threadAfter, connectedCells, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints, mergeSmallPatches,
   mergeColor, outlineCells, outlineEdges, paletteFromHexes, reduceColors, removeColor, removeUnused, replaceAll,
   resized, serialize, tidyCell,
 } from './model';
@@ -254,5 +254,68 @@ describe('cleaning up', () => {
     p.palette[1].locked = true;
     const r = cleanUp(p, { similar: 2, rare: 0, patch: 0, smooth: 0 });
     expect(r.pattern.palette.map((c) => c.id)).toEqual([2]);
+  });
+});
+
+describe('stitching order', () => {
+  /** The squares marked '#' in some rows of text, as indexes. */
+  const shape = (rows: string[]) => {
+    const w = rows[0].length, out: number[] = [];
+    rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch === '#') out.push(y * w + x); }));
+    return { w, cells: out.sort(() => 0.5 - Math.random()) };
+  };
+  const xy = (i: number, w: number) => [i % w, (i / w) | 0];
+
+  it('works rows from the top down, starting top left, every row left to right when going there and back', () => {
+    const { w, cells } = shape(['.####.', '######', '######', '.####.']);
+    const r = stitchRoute(cells, w, 'rows');
+    expect(r.length).toBe(4);
+    expect(r.every((run) => !run.vertical)).toBe(true);
+    expect(r.map((run) => xy(run.cells[0], w))).toEqual([[1, 0], [0, 1], [0, 2], [1, 3]]);
+    expect(r.flatMap((run) => run.cells).sort((a, b) => a - b)).toEqual([...cells].sort((a, b) => a - b));
+  });
+
+  it('snakes back and forth when each cross is finished as you go', () => {
+    const { w, cells } = shape(['####', '####', '####']);
+    const r = stitchRoute(cells, w, 'single');
+    expect(r.map((run) => xy(run.cells[0], w)[0])).toEqual([0, 3, 0]);
+    expect(r.map((run) => xy(run.cells[run.cells.length - 1], w)[0])).toEqual([3, 0, 3]);
+  });
+
+  it('uses columns for a tall thin shape', () => {
+    const { w, cells } = shape(['.#..', '.#..', '.##.', '.##.', '.#..']);
+    const r = stitchRoute(cells, w, 'rows');
+    expect(r[0].vertical).toBe(true);
+    expect(r[0].cells.map((i) => xy(i, w))).toEqual([[1, 0], [1, 1], [1, 2], [1, 3], [1, 4]]);
+    expect(r.length).toBe(2);
+  });
+
+  it('finishes one arm of a U before going back up for the other', () => {
+    const { w, cells } = shape(['##...##', '##...##', '##...##', '#######']);
+    const r = stitchRoute(cells, w, 'rows');
+    const tops = r.map((run) => xy(run.cells[0], w));
+    // Left arm top to bottom, the bottom row, then the right arm.
+    expect(tops.slice(0, 4)).toEqual([[0, 0], [0, 1], [0, 2], [0, 3]]);
+    expect(tops.slice(4).every(([x]) => x >= 5)).toBe(true);
+    expect(carry(threadAfter(r[3], 'rows'), r[4].cells[0], w)).toBeGreaterThan(MAX_CARRY);
+  });
+
+  it('plans only what is left: a row broken by finished stitches becomes two pieces', () => {
+    // Row 0 has its middle two squares done already.
+    const { w, cells } = shape(['##..##', '######']);
+    const r = stitchRoute(cells, w, 'single');
+    expect(r.length).toBe(3);
+    expect(r.flatMap((run) => run.cells).length).toBe(cells.length);
+  });
+
+  it('starts from where the thread is, not the top left', () => {
+    const { w, cells } = shape(['####', '####', '####', '####']);
+    const r = stitchRoute(cells, w, 'rows', 3 * w + 3); // thread at the bottom right
+    expect(xy(r[0].cells[0], w)).toEqual([3, 3]);
+    expect(xy(r[0].cells[r[0].cells.length - 1], w)).toEqual([0, 3]);
+  });
+
+  it('handles a single square', () => {
+    expect(stitchRoute([7], 5, 'rows')).toEqual([{ cells: [7], vertical: false }]);
   });
 });

@@ -3,7 +3,8 @@ import { CanvasView } from './CanvasView';
 import { inkFor } from './color';
 import { PaletteColor } from './model';
 import {
-  canKeepAwake, closeStitch, currentSection, describeDistance, focusColor, measureToSection, setMeasuring, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
+  canKeepAwake, closeStitch, currentRun, currentSection, describeDistance, describeRun, focusColor, measureToSection, route, runDone,
+  setMeasuring, setOrderGuide, setOrderMethod, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
   progress, sections, sessionStart, setOnlyFocus, setSectionDone, setStitchSymbols, stepSection, undoFloor,
 } from './stitch';
 import { S, fitView, openDialog, redo, undo, useStore, zoomBy } from './store';
@@ -57,6 +58,9 @@ export function StitchScreen() {
       <label className="check" title="Fade out the other colors, and only tick stitches of this color">
         <input type="checkbox" checked={S.onlyFocus} onChange={(e) => setOnlyFocus(e.target.checked)} /> Only this color
       </label>
+      <label className="check" title="Arrows showing where to start in this section, which way to go and where to turn (O)">
+        <input type="checkbox" checked={S.orderGuide} onChange={(e) => setOrderGuide(e.target.checked)} /> Stitching order
+      </label>
       {canKeepAwake() && (
         <label className="check" title="Stop the screen going dark while you stitch">
           <input type="checkbox" checked={awake} onChange={(e) => setAwake(e.target.checked)} /> Keep screen on
@@ -66,6 +70,32 @@ export function StitchScreen() {
   );
   const pickSection = (n: number) => { goSection(n); setSheet(null); };
   const [noStitches, setNoStitches] = useState(false);
+  // The order to stitch the current section in, and the row to do next.
+  const runs = S.orderGuide && sec ? route() : [];
+  const now = runs.length ? currentRun() : -1;
+  const step = now >= 0 ? describeRun(now) : null;
+  const orderCard = S.orderGuide && sec && !isFinished(sec) && (
+    <div className="order-card">
+      <div className="line">
+        <b>Stitching order</b>
+        <select value={S.orderMethod} onChange={(e) => setOrderMethod(e.target.value as 'rows' | 'single')} title="How you work a row">
+          <option value="rows">Rows, there and back</option>
+          <option value="single">One cross at a time</option>
+        </select>
+      </div>
+      {step && (
+        <>
+          <span className="step">Next {runs[now].vertical ? 'column' : 'row'}: {step.title}</span>
+          <span className="muted">{step.left} {runs[now].vertical ? 'column' : 'row'}{step.left === 1 ? '' : 's'} left in this section, planned from where you are.</span>
+          <span className="muted">{step.how}</span>
+          <span className={step.jump ? 'jump' : 'muted'}>{step.then}</span>
+          <button className="btn small primary" onClick={() => runDone(now)} title="Tick every stitch in this row">
+            {runs[now].vertical ? 'Column' : 'Row'} done ✓
+          </button>
+        </>
+      )}
+    </div>
+  );
   const measureNew = () => { setSheet(null); setNoStitches(!measureToSection()); };
   const m = S.measuring ? S.measure : null;
   // Over the pattern while measuring: what to do next, or the answer.
@@ -255,6 +285,8 @@ export function StitchScreen() {
               </>
             )}
 
+            {orderCard}
+
             {toggles}
 
             <div className="tabs">
@@ -284,6 +316,13 @@ export function StitchScreen() {
             ) : showing === 'colors' ? colorList : sectionList}
           </section>
 
+          {/* Phone: the row to do next, just above the bar, when the stitching order is showing. */}
+          {step && sec && !isFinished(sec) && (
+            <div className="order-strip">
+              <span className="what"><b>Next:</b> {step.title}{step.jump ? ' · then a new thread' : ''}</span>
+              <button className="btn small primary" onClick={() => runDone(now)}>{runs[now].vertical ? 'Column' : 'Row'} ✓</button>
+            </div>
+          )}
           {/* Phone: one slim bar. The color opens the colors, the section opens the sections. */}
           <nav className="phonebar" aria-label="Stitching">
             {color && (
@@ -321,7 +360,9 @@ export function StitchScreen() {
       </div>
 
       <footer className="stitch-hint">
-        {S.measuring
+        {S.orderGuide && !S.measuring && sec && !isFinished(sec)
+          ? 'Start at the green square and follow the arrows: the numbered rows in order, the bold one next. Dotted lines are moves between rows; orange means start a new thread.'
+          : S.measuring
           ? (S.touch ? 'Measuring: tap two squares to count the squares between them.' : 'Measuring: click two squares, or drag from one to the other, to count the squares between them. M or Esc stops.')
           : S.touch
           ? 'Tap a stitch to tick it off; tap again to untick. Drag to move, pinch to zoom.'
