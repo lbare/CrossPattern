@@ -97,6 +97,7 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
       ['The whole pattern', 'The Whole pattern box shows how many stitches are done out of the total, how many are left to go, how many colors are finished and how many you have done this session. A line along the top fills up as you go. On a phone the total is under the pattern name, and the full figures are in the ⋯ menu.'],
       ['On a phone', 'The pattern fills the screen, with one slim bar underneath: the color (tap it to change color), ‹ and › for the previous and next section, the section number (tap it for the list of sections) and ✓ to tick the section off. Tap a stitch to tick it, drag to move and pinch to zoom. The ⋯ button at the top holds the rest: Only this color, Keep screen on, Symbols, Whole pattern, Send and Help. The back button returns to the editor.'],
       ['Picking up where you left off', 'The color and section you were on are remembered for each project. If you leave the site on the stitch screen, it opens there next time.'],
+      ['Where you are', 'On a computer, a label beside the mouse gives the column and row of the square under it, numbered like a printed chart, with its color and whether it is stitched.'],
       ['Keys', 'On a computer, ← and → move between sections, Enter ticks the current section off, and ⌘/Ctrl Z undoes.'],
     ],
   },

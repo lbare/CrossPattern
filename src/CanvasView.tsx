@@ -490,6 +490,42 @@ export function CanvasView() {
     };
 
     const status = document.getElementById('status-pos');
+    // On the stitch screen, a label beside the mouse says which square it is over, in printed-chart numbers.
+    const tip = wrap.closest('.stitch') ? document.createElement('div') : null;
+    if (tip) { tip.className = 'hover-tip'; tip.hidden = true; wrap.appendChild(tip); }
+    let tipAt: { pointerType: string; clientX: number; clientY: number; x: number; y: number } | null = null;
+    const showTip = (e: { pointerType: string; clientX: number; clientY: number }, x: number, y: number) => {
+      if (!tip) return;
+      tipAt = { pointerType: e.pointerType, clientX: e.clientX, clientY: e.clientY, x, y };
+      const p = S.pattern;
+      if (e.pointerType !== 'mouse' || drag?.mode === 'pan' || !inside(x, y)) { tip.hidden = true; return; }
+      const i = y * p.width + x, c = p.palette.find((k) => k.id === p.cells[i]);
+      const done = !!(c && p.done?.[i]);
+      tip.replaceChildren();
+      const pos = document.createElement('b');
+      pos.textContent = `Column ${x + 1}, row ${y + 1}`;
+      tip.append(pos);
+      if (c) {
+        const chip = document.createElement('span');
+        chip.className = 'tip-chip';
+        chip.style.background = c.hex;
+        chip.style.color = inkFor(c.hex);
+        chip.textContent = c.symbol;
+        const what = document.createElement('span');
+        what.textContent = c.hex.toUpperCase() + (done ? ' · stitched' : '');
+        tip.append(chip, what);
+      } else {
+        const what = document.createElement('span');
+        what.textContent = 'empty';
+        tip.append(what);
+      }
+      tip.hidden = false;
+      // Beside the pointer, flipping to the other side near the right or bottom edge.
+      const r = wrap.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      tip.style.left = `${px + 16 + tw > r.width ? px - 12 - tw : px + 16}px`;
+      tip.style.top = `${py + 18 + th > r.height ? py - 10 - th : py + 18}px`;
+    };
 
     const move = (e: PointerEvent) => {
       if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
@@ -506,6 +542,7 @@ export function CanvasView() {
       const c = pos(e), p = S.pattern;
       hover = { x: c.fx, y: c.fy };
       if (status) status.textContent = inside(c.x, c.y) ? `${c.x + 1}, ${c.y + 1}` : '';
+      showTip(e, c.x, c.y);
       if (!drag) return schedule();
       switch (drag.mode) {
         case 'done': {
@@ -615,10 +652,11 @@ export function CanvasView() {
       if (drag?.mode === 'pan') return;
       canvas.style.cursor = S.tool === 'pan' || keys.space ? 'grab' : 'crosshair';
     };
-    const leave = () => { hover = null; if (status) status.textContent = ''; schedule(); };
+    const leave = () => { hover = null; if (status) status.textContent = ''; if (tip) tip.hidden = true; tipAt = null; schedule(); };
     const noMenu = (e: Event) => e.preventDefault();
 
-    const unsub = subscribe(() => { updateCursor(); schedule(); });
+    // A tick, scroll or zoom changes what the label says, so it is redrawn whenever anything changes.
+    const unsub = subscribe(() => { updateCursor(); schedule(); if (tipAt && tip && !tip.hidden) { const c = pos(tipAt as unknown as MouseEvent); showTip(tipAt, c.x, c.y); } });
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
     canvas.addEventListener('pointerdown', down);
@@ -632,6 +670,7 @@ export function CanvasView() {
 
     return () => {
       unsub();
+      tip?.remove();
       ro.disconnect();
       cancelAnimationFrame(raf);
       canvas.removeEventListener('pointerdown', down);

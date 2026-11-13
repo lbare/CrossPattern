@@ -146,7 +146,8 @@ cross over them.
 
 <img src="docs/stitching-phone.png" alt="The stitch screen on a phone" width="300">
 
-On a computer, ← and → move between sections and Enter ticks the current one off.
+On a computer, a label beside the mouse gives the column and row of the square under it (numbered like a printed
+chart), with its color and whether it is stitched. ← and → move between sections and Enter ticks the current one off.
 
 ### Projects, saving and printing
 
