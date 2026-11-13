@@ -658,3 +658,41 @@ export function colorThread(id: number): { mm: number; skeins: number } {
   const mm = n * perStitch(S.thread.count, S.orderMethod) * 1.1 + Math.ceil(n / 30) * 100;
   return { mm, skeins: (mm * S.thread.strands) / (6 * 8000) };
 }
+
+// ---- Starting somewhere else --------------------------------------------------
+
+export function setPickingStart(on: boolean): void {
+  S.pickingStart = on;
+  emit(false);
+}
+
+/**
+ * Starts the plan for a section on a square of your choosing instead of the suggested one. A square in
+ * another section of the color makes that section the current one. Returns false for a square that is
+ * not of the color being worked, or already stitched.
+ */
+export function setStart(i: number): boolean {
+  const p = S.pattern;
+  if (p.cells[i] !== S.stitchColor || p.done?.[i]) return false;
+  if (!(S.stitchCell >= 0 && sections().at[S.stitchCell] === sections().at[i])) {
+    S.stitchCell = i;
+    outline();
+    remember();
+  }
+  thread = { section: sectionKey(), at: i };
+  S.pickingStart = false;
+  S.orderGuide = true;
+  emit(false);
+  return true;
+}
+
+/** Whether the current section's plan starts from a square chosen by hand. */
+export function startChosen(): boolean {
+  return thread.section === sectionKey() && thread.at >= 0 && !S.pattern.done?.[thread.at];
+}
+
+/** Goes back to the suggested start for the current section. */
+export function clearStart(): void {
+  if (thread.section === sectionKey()) thread = { section: '', at: -1 };
+  emit(false);
+}

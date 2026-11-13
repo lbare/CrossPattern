@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { clamp, hexToRgb, inkFor, rgbToHex } from './color';
 import {
-  currentRun, currentSection, describeDistance, measureClick, measureMove, measureRelease, moveBetween, route, sectionCells, suggestSection, threadPlan, sections, tickable, ticked,
+  currentRun, currentSection, describeDistance, measureClick, measureMove, measureRelease, moveBetween, route, sectionCells, setStart, suggestSection, threadPlan, sections, tickable, ticked,
 } from './stitch';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, threadAfter, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
@@ -537,6 +537,7 @@ export function CanvasView() {
     const tapped = (x: number, y: number) => {
       const p = S.pattern;
       if (!inside(x, y)) return;
+      if (S.stitchMode && S.pickingStart) { setStart(y * p.width + x); return; }
       if (S.stitchMode && S.measuring) return measureClick(x, y);
       const i = y * p.width + x, id = p.cells[i];
       if (!id) return;
@@ -585,6 +586,11 @@ export function CanvasView() {
         return;
       }
       if (e.button !== 0) return;
+      if (S.stitchMode && S.pickingStart) {
+        // Choosing where to start: the square clicked becomes the start, and nothing is ticked.
+        if (inside(c.x, c.y)) setStart(c.y * p.width + c.x);
+        return;
+      }
       if (S.stitchMode && S.measuring) {
         // Measuring: a click sets the start, and the next click (or letting go after a drag) sets the end.
         if (!inside(c.x, c.y)) return;

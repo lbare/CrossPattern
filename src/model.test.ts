@@ -357,3 +357,17 @@ describe('thread estimate', () => {
     expect(planThread(runs, 40, o).lengths.length).toBe(2);
   });
 });
+
+describe('stitching order from a chosen start', () => {
+  const block = (w: number, h: number, width = 20) => Array.from({ length: w * h }, (_, k) => ((k / w) | 0) * width + (k % w));
+  it('starts exactly on a chosen square at the end of a row', () => {
+    const r = stitchRoute(block(5, 4), 20, 'rows', 3 * 20 + 4); // bottom right
+    expect(r[0].cells[0]).toBe(64);
+    expect(r[0].cells[r[0].cells.length - 1]).toBe(60);
+  });
+  it('splits a row when the chosen start is partway along it, and still covers every square once', () => {
+    const cells = block(6, 3), r = stitchRoute(cells, 20, 'rows', 20 + 3); // row 1, column 3
+    expect(r[0].cells).toEqual([23, 24, 25]);
+    expect(r.flatMap((run) => run.cells).sort((a, b) => a - b)).toEqual([...cells].sort((a, b) => a - b));
+  });
+});

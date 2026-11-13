@@ -4,7 +4,7 @@ import { inkFor } from './color';
 import { PaletteColor } from './model';
 import {
   canKeepAwake, closeStitch, currentRun, currentSection, describeDistance, describeRun, focusColor, measureToSection, route, runDone,
-  setMeasuring, setOrderAll, setOrderGuide, setOrderMethod, suggestColor, suggestSection, colorThread, setThread, showLength, threadPlan, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
+  setMeasuring, setOrderAll, setOrderGuide, setOrderMethod, clearStart, setPickingStart, startChosen, suggestColor, suggestSection, colorThread, setThread, showLength, threadPlan, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
   progress, sections, sessionStart, setOnlyFocus, setSectionDone, setStitchSymbols, stepSection, undoFloor,
 } from './stitch';
 import { S, fitView, openDialog, redo, undo, useStore, zoomBy } from './store';
@@ -189,6 +189,12 @@ export function StitchScreen() {
             <button className="btn small primary" onClick={() => runDone(now)} title="Tick every stitch in this row">
               {runs[now].vertical ? 'Column' : 'Row'} done ✓
             </button>
+            <span className="start-links">
+              <button className="link-btn" onClick={() => setPickingStart(!S.pickingStart)} title="Pick the square you want to begin from; the order is planned again from there">
+                {S.pickingStart ? 'Cancel choosing' : 'Start somewhere else'}
+              </button>
+              {startChosen() && <button className="link-btn" onClick={clearStart}>Use the suggested start</button>}
+            </span>
             <label className="check" title="Draw every row of the plan, not just the ones for the thread in your needle">
               <input type="checkbox" checked={S.orderAll} onChange={(e) => setOrderAll(e.target.checked)} /> Whole plan ({step.left} {runs[now].vertical ? 'column' : 'row'}{step.left === 1 ? '' : 's'})
             </label>
@@ -323,6 +329,12 @@ export function StitchScreen() {
         <div className="stitch-canvas">
           <CanvasView />
           {measureBar}
+          {S.pickingStart && (
+            <div className="measure-bar start-bar" role="status">
+              <span className="what">{S.touch ? 'Tap' : 'Click'} the square you want to start from. Any section of this color will do.</span>
+              <button className="btn small" onClick={() => setPickingStart(false)}>Cancel</button>
+            </div>
+          )}
         </div>
         <aside className="stitch-side">
           <section className="dock">
@@ -414,6 +426,8 @@ export function StitchScreen() {
                 <div className="row">
                   <button className={'btn' + (S.measuring ? ' on' : '')} onClick={() => { setMeasuring(!S.measuring); setSheet(null); }}>Measure</button>
                   {sec && <button className="btn" onClick={measureNew}>Measure to this section</button>}
+                  {S.orderGuide && <button className="btn" onClick={() => { setSheet(null); setPickingStart(true); }}>Choose where to start</button>}
+                  {S.orderGuide && startChosen() && <button className="btn" onClick={() => { setSheet(null); clearStart(); }}>Use the suggested start</button>}
                   <button className={'btn' + (S.showSymbols ? ' on' : '')} onClick={() => setStitchSymbols(!S.showSymbols)}>Symbols</button>
                   <button className="btn" onClick={() => { fitView(); setSheet(null); }}>Whole pattern</button>
                   <button className="btn" onClick={() => { setSheet(null); openDialog('send'); }}>Send to another device</button>
@@ -467,7 +481,9 @@ export function StitchScreen() {
       </div>
 
       <footer className="stitch-hint">
-        {S.orderGuide && !S.measuring && sec && !isFinished(sec)
+        {S.pickingStart
+          ? 'Choosing where to start: the square you pick is not ticked. Esc cancels.'
+          : S.orderGuide && !S.measuring && sec && !isFinished(sec)
           ? 'Start at the green square and follow the arrows: the numbered rows in order, the bold one next. Dotted lines are moves between rows; orange means start a new thread.'
           : S.measuring
           ? (S.touch ? 'Measuring: tap two squares to count the squares between them.' : 'Measuring: click two squares, or drag from one to the other, to count the squares between them. M or Esc stops.')

@@ -636,7 +636,9 @@ export const MAX_CARRY = 3;
  *
  * `cells` are the squares still to stitch, so stitches already done, in any order, are simply left out
  * and a row broken by them becomes two. With `from` (a square where the thread is now), the plan starts
- * from the nearest row to it instead of the top left.
+ * from the nearest row to it instead of the top left. If `from` is itself one of the squares to stitch
+ * (a start chosen by hand), the plan starts on exactly that square; if it is partway along a row, the row
+ * is split there and the rest of it is done later.
  */
 export function stitchRoute(cells: number[], width: number, method: StitchMethod, from = -1): Run[] {
   if (!cells.length) return [];
@@ -659,6 +661,14 @@ export function stitchRoute(cells: number[], width: number, method: StitchMethod
   // Columns only when they are clearly the longer way: a thin upright line, a tall narrow patch.
   const vertical = cols.length * 1.5 <= rows.length;
   const pool = vertical ? cols : rows;
+  // A chosen start partway along a row: split the row there, so the plan can begin on that square.
+  let startRun = -1;
+  if (from >= 0 && set.has(from)) {
+    const r = pool.findIndex((run) => run.includes(from)), j = pool[r].indexOf(from);
+    // At either end the row is simply worked from there; in the middle it is split.
+    if (j > 0 && j < pool[r].length - 1) { pool.push(pool[r].slice(0, j)); pool[r] = pool[r].slice(j); }
+    startRun = r;
+  }
   const used = new Uint8Array(pool.length), out: Run[] = [];
   // Distance to move the thread, with going back up (or back left, for columns) counted as costing more.
   const cost = (from: number, to: number) => {
@@ -667,7 +677,11 @@ export function stitchRoute(cells: number[], width: number, method: StitchMethod
     return Math.abs(dx) + Math.abs(dy) + back * 3;
   };
   let k = 0, forward = true;
-  if (from >= 0) {
+  if (startRun >= 0) {
+    k = startRun;
+    // Begin on the chosen square and work away from it: the run starts there, unless it is the far end.
+    forward = pool[k][0] === from;
+  } else if (from >= 0) {
     let bestCost = Infinity;
     pool.forEach((run, r) => {
       const ca = cost(from, run[0]), cb = cost(from, run[run.length - 1]);

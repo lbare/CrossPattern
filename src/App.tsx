@@ -10,7 +10,7 @@ import { StitchScreen } from './StitchScreen';
 import { ReceiveDialog, SendDialog } from './sendui';
 import { LINK_PREFIX } from './share';
 import {
-  currentSection, isFinished, nextUnfinished, openStitch, sections, setMeasuring, setOrderGuide, setSectionDone, startScreen, stepSection, syncScreen,
+  currentSection, isFinished, nextUnfinished, openStitch, sections, setMeasuring, setOrderGuide, setPickingStart, setSectionDone, startScreen, stepSection, syncScreen,
   undoFloor,
 } from './stitch';
 import {
@@ -96,6 +96,7 @@ export function App() {
         else if (k === '?') openDialog('help');
         else if (k === 'm') setMeasuring(!S.measuring);
         else if (k === 'o') setOrderGuide(!S.orderGuide);
+        else if (k === 'escape' && S.pickingStart) setPickingStart(false);
         else if (k === 'escape' && S.measuring) setMeasuring(false);
         else return;
         e.preventDefault();

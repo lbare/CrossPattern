@@ -656,3 +656,7 @@ details.thread-card > summary::before { content: '▸ '; color: var(--muted); }
 details.thread-card[open] > summary::before { content: '▾ '; }
 details.thread-card[open] { gap: 6px; }
 .upnext .why { font-size: 11px; }
+
+/* ---- Stitch screen: choosing where to start ---- */
+.start-links { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.start-bar { border-color: #16a34a; }
