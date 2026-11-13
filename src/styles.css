@@ -592,3 +592,22 @@ button { touch-action: manipulation; }
 .hover-tip[hidden] { display: none; }
 .hover-tip .tip-chip { width: 16px; height: 16px; border-radius: 3px; display: grid; place-items: center; font-size: 10px; border: 1px solid rgba(128, 128, 128, 0.5); }
 .hover-tip span:last-child { color: var(--muted); }
+
+/* ---- Stitch screen: measuring between two squares ---- */
+.stitch-canvas { position: relative; display: grid; min-width: 0; min-height: 0; }
+.stitch-canvas > .canvas-wrap { min-height: 0; }
+.measure-bar {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 4; max-width: calc(100% - 20px);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
+  padding: 6px 8px 6px 12px; background: var(--surface); border: 1px solid #0a84ff; border-radius: 9px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3); font-size: 13px;
+}
+.measure-bar .what { padding-right: 4px; }
+.measure-bar b { color: #0a84ff; font-size: 14px; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; text-align: left; justify-self: start; }
+.link-btn:hover { text-decoration: underline; }
+.hover-tip em { font-style: normal; font-weight: 600; color: #0a84ff; }
+@media (max-width: 760px) {
+  .measure-bar { bottom: 6px; font-size: 12px; }
+  .measure-bar .muted { display: none; }
+}

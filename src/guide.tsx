@@ -98,7 +98,9 @@ const SECTIONS: { title: string; intro?: string; image?: [string, string]; items
       ['On a phone', 'The pattern fills the screen, with one slim bar underneath: the color (tap it to change color), ‹ and › for the previous and next section, the section number (tap it for the list of sections) and ✓ to tick the section off. Tap a stitch to tick it, drag to move and pinch to zoom. The ⋯ button at the top holds the rest: Only this color, Keep screen on, Symbols, Whole pattern, Send and Help. The back button returns to the editor.'],
       ['Picking up where you left off', 'The color and section you were on are remembered for each project. If you leave the site on the stitch screen, it opens there next time.'],
       ['Where you are', 'On a computer, a label beside the mouse gives the column and row of the square under it, numbered like a printed chart, with its color and whether it is stitched.'],
-      ['Keys', 'On a computer, ← and → move between sections, Enter ticks the current section off, and ⌘/Ctrl Z undoes.'],
+      ['Measuring', 'Measure (M on a computer, in the ⋯ menu on a phone) counts the squares between two points. Click the square to measure from, then the one to measure to, or drag from one to the other. A dotted path shows the way, with how many squares across and how many down, and the answer appears at the bottom, such as "12 right, 6 down". Clicks measure instead of ticking until you press Done.'],
+      ['Starting a new section', '"How far is it from my stitches?" under the section, or "From my stitches to this section" while measuring, measures from the nearest stitch you have already done to where the section starts, so you can count your way over to it.'],
+      ['Keys', 'On a computer, ← and → move between sections, Enter ticks the current section off, M measures, and ⌘/Ctrl Z undoes.'],
     ],
   },
   {

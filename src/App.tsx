@@ -10,7 +10,8 @@ import { StitchScreen } from './StitchScreen';
 import { ReceiveDialog, SendDialog } from './sendui';
 import { LINK_PREFIX } from './share';
 import {
-  currentSection, isFinished, nextUnfinished, openStitch, sections, setSectionDone, startScreen, stepSection, syncScreen, undoFloor,
+  currentSection, isFinished, nextUnfinished, openStitch, sections, setMeasuring, setSectionDone, startScreen, stepSection, syncScreen,
+  undoFloor,
 } from './stitch';
 import {
   S, Tool, clearPatch, commitFloating, copySelection, patchAction, cutSelection, deleteSelection, emit, fitView, keys, nudgeSelection,
@@ -93,6 +94,8 @@ export function App() {
         else if (k === '-') zoomBy(0.8);
         else if (k === '0') fitView();
         else if (k === '?') openDialog('help');
+        else if (k === 'm') setMeasuring(!S.measuring);
+        else if (k === 'escape' && S.measuring) setMeasuring(false);
         else return;
         e.preventDefault();
         return;

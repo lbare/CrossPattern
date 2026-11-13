@@ -3,7 +3,7 @@ import { CanvasView } from './CanvasView';
 import { inkFor } from './color';
 import { PaletteColor } from './model';
 import {
-  canKeepAwake, closeStitch, currentSection, focusColor, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
+  canKeepAwake, closeStitch, currentSection, describeDistance, focusColor, measureToSection, setMeasuring, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
   progress, sections, sessionStart, setOnlyFocus, setSectionDone, setStitchSymbols, stepSection, undoFloor,
 } from './stitch';
 import { S, fitView, openDialog, redo, undo, useStore, zoomBy } from './store';
@@ -65,6 +65,28 @@ export function StitchScreen() {
     </div>
   );
   const pickSection = (n: number) => { goSection(n); setSheet(null); };
+  const [noStitches, setNoStitches] = useState(false);
+  const measureNew = () => { setSheet(null); setNoStitches(!measureToSection()); };
+  const m = S.measuring ? S.measure : null;
+  // Over the pattern while measuring: what to do next, or the answer.
+  const measureBar = S.measuring && (
+    <div className="measure-bar" role="status">
+      <span className="what">
+        {noStitches && !m ? 'Nothing is stitched yet to measure from. ' : ''}
+        {!m ? (S.touch ? 'Tap the square to measure from.' : 'Click the square to measure from.')
+          : !m.fixed ? (S.touch ? 'Now tap the square to measure to.' : 'Now click the square to measure to.')
+          : (
+            <>
+              <b>{describeDistance(m.b.x - m.a.x, m.b.y - m.a.y)}</b>
+              <span className="muted"> · column {m.a.x + 1}, row {m.a.y + 1} → column {m.b.x + 1}, row {m.b.y + 1}</span>
+            </>
+          )}
+      </span>
+      {sec && <button className="btn small" title="Measure from the nearest stitch you have done to where this section starts" onClick={measureNew}>From my stitches to this section</button>}
+      {m && <button className="btn small" onClick={() => { S.measure = null; setMeasuring(true); }}>Clear</button>}
+      <button className="btn small primary" onClick={() => setMeasuring(false)}>Done</button>
+    </div>
+  );
   const session = Math.max(0, all.done - sessionStart);
   const colorsFinished = colors.filter((c) => { const e = prog.get(c.id)!; return e.done >= e.total; }).length;
   /** Progress over the whole pattern, every color together. */
@@ -157,6 +179,7 @@ export function StitchScreen() {
           <button className="btn icon" onClick={() => zoomBy(1.25)} title="Zoom in">+</button>
         </div>
         <div className="group options">
+          <button className={'btn' + (S.measuring ? ' on' : '')} title="Count the squares across and down between two stitches (M)" onClick={() => setMeasuring(!S.measuring)}>Measure</button>
           <button className={'btn' + (S.showSymbols ? ' on' : '')} title="Show each color's chart symbol in its squares" onClick={() => setStitchSymbols(!S.showSymbols)}>Symbols</button>
           <button className="btn" onClick={() => openDialog('send')} title="Open this project, with its progress, on another device">Send</button>
           <button className="btn help-btn" onClick={() => openDialog('help')} title="How this works">Help</button>
@@ -166,7 +189,10 @@ export function StitchScreen() {
       </header>
 
       <div className="stitch-main">
-        <CanvasView />
+        <div className="stitch-canvas">
+          <CanvasView />
+          {measureBar}
+        </div>
         <aside className="stitch-side">
           <section className="dock">
             {overall}
@@ -200,6 +226,9 @@ export function StitchScreen() {
                     <>
                       <b>Section {k + 1} of {list.length}</b>
                       <span className="muted">column {sec.x + 1}, row {sec.y + 1} · {sec.done} of {sec.cells.length} stitched</span>
+                      <button className="link-btn" title="Count the squares from the nearest stitch you have done to where this section starts" onClick={measureNew}>
+                        How far is it from my stitches?
+                      </button>
                     </>
                   ) : (
                     <span className="muted">{list.length} section{list.length === 1 ? '' : 's'}. Pick one, or tap a stitch.</span>
@@ -244,6 +273,8 @@ export function StitchScreen() {
                 {overall}
                 {toggles}
                 <div className="row">
+                  <button className={'btn' + (S.measuring ? ' on' : '')} onClick={() => { setMeasuring(!S.measuring); setSheet(null); }}>Measure</button>
+                  {sec && <button className="btn" onClick={measureNew}>Measure to this section</button>}
                   <button className={'btn' + (S.showSymbols ? ' on' : '')} onClick={() => setStitchSymbols(!S.showSymbols)}>Symbols</button>
                   <button className="btn" onClick={() => { fitView(); setSheet(null); }}>Whole pattern</button>
                   <button className="btn" onClick={() => { setSheet(null); openDialog('send'); }}>Send to another device</button>
@@ -290,7 +321,9 @@ export function StitchScreen() {
       </div>
 
       <footer className="stitch-hint">
-        {S.touch
+        {S.measuring
+          ? (S.touch ? 'Measuring: tap two squares to count the squares between them.' : 'Measuring: click two squares, or drag from one to the other, to count the squares between them. M or Esc stops.')
+          : S.touch
           ? 'Tap a stitch to tick it off; tap again to untick. Drag to move, pinch to zoom.'
           : 'Click or drag over stitches to tick them off; Shift-click ticks a whole section. Scroll to move, ⌘/Ctrl-scroll to zoom. ← → change section.'}
       </footer>

@@ -255,3 +255,73 @@ export function keepAwake(on: boolean): void {
   else if (lock) { lock.release().catch(() => {}); lock = null; }
 }
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { acquire(); });
+
+// ---- Measuring ------------------------------------------------------------
+// Counting squares between two points: how far across and how far down to go from one stitch to the next.
+
+export function setMeasuring(on: boolean): void {
+  S.measuring = on;
+  if (!on) S.measure = null;
+  emit(false);
+}
+
+/** A click while measuring: the first sets the start, the second the end; a third starts again. */
+export function measureClick(x: number, y: number): void {
+  const m = S.measure;
+  if (!m || m.fixed) S.measure = { a: { x, y }, b: { x, y }, fixed: false };
+  else S.measure = { ...m, b: { x, y }, fixed: true };
+  emit(false);
+}
+
+/** The mouse moved: until the end is chosen, it follows the mouse. */
+export function measureMove(x: number, y: number): void {
+  const m = S.measure;
+  if (!m || m.fixed || (m.b.x === x && m.b.y === y)) return;
+  S.measure = { ...m, b: { x, y } };
+  emit(false);
+}
+
+/** Ends a drag: if the mouse moved to another square, that square is the end. */
+export function measureRelease(x: number, y: number): void {
+  const m = S.measure;
+  if (m && !m.fixed && (m.a.x !== x || m.a.y !== y)) { S.measure = { ...m, b: { x, y }, fixed: true }; emit(false); }
+}
+
+/** How far it is from the start to the end, in squares: positive is right and down. */
+export function measured(): { dx: number; dy: number } | null {
+  const m = S.measure;
+  return m ? { dx: m.b.x - m.a.x, dy: m.b.y - m.a.y } : null;
+}
+
+/** "12 right, 5 down", or "Same square". */
+export function describeDistance(dx: number, dy: number): string {
+  const parts: string[] = [];
+  if (dx) parts.push(`${Math.abs(dx)} ${dx > 0 ? 'right' : 'left'}`);
+  if (dy) parts.push(`${Math.abs(dy)} ${dy > 0 ? 'down' : 'up'}`);
+  return parts.length ? parts.join(', ') : 'Same square';
+}
+
+/**
+ * For starting a new section: measures from the nearest stitch already done (of any color) to the first
+ * stitch of the current section, and brings both into view. Returns false if nothing is stitched yet.
+ */
+export function measureToSection(): boolean {
+  const k = currentSection(), sec = sections().list[k];
+  const p = S.pattern, done = p.done;
+  if (!sec || !done) return false;
+  const start = Math.min(...sec.cells), sx = start % p.width, sy = (start / p.width) | 0;
+  const mine = new Set(sec.cells);
+  let best = -1, bestD = Infinity;
+  for (let i = 0; i < done.length; i++) {
+    if (!done[i] || !p.cells[i] || mine.has(i)) continue;
+    const d = Math.abs((i % p.width) - sx) + Math.abs(((i / p.width) | 0) - sy);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  if (best < 0) return false;
+  const ax = best % p.width, ay = (best / p.width) | 0;
+  S.measuring = true;
+  S.measure = { a: { x: ax, y: ay }, b: { x: sx, y: sy }, fixed: true };
+  const x0 = Math.min(ax, sx), y0 = Math.min(ay, sy);
+  showRect({ x: x0 - 2, y: y0 - 2, w: Math.abs(ax - sx) + 5, h: Math.abs(ay - sy) + 5 });
+  return true;
+}

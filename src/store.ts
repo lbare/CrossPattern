@@ -64,6 +64,10 @@ export const S = {
   stitchCell: -1,
   onlyFocus: true,
   sectionMask: null as Uint8Array | null,
+  /** On the stitch screen: measuring the distance between two squares. `a` is where it starts, `b` where it ends,
+   *  and `fixed` is true once both ends are chosen (until then `b` follows the mouse). */
+  measuring: false,
+  measure: null as { a: { x: number; y: number }; b: { x: number; y: number }; fixed: boolean } | null,
   /** A rectangle to bring into view as soon as a newly shown canvas knows its size. */
   pendingRect: null as Rect | null,
   /** On narrow screens the color panel is a drawer; this is whether it is open. */

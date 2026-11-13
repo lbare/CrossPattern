@@ -149,6 +149,11 @@ cross over them.
 On a computer, a label beside the mouse gives the column and row of the square under it (numbered like a printed
 chart), with its color and whether it is stitched. ← and → move between sections and Enter ticks the current one off.
 
+**Measure** (M, or the ⋯ menu on a phone) counts the squares between two points: click where to measure from and
+where to measure to, or drag between them, and it shows a path with the answer, such as "12 right, 6 down". When
+starting a new section, "How far is it from my stitches?" measures from the nearest stitch you have already done to
+where the section starts.
+
 ### Projects, saving and printing
 
 - Every pattern is a project. **Projects** opens the library, where you can switch, duplicate and delete.

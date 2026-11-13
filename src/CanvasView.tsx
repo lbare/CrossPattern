@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { clamp, hexToRgb, inkFor, rgbToHex } from './color';
-import { currentSection, sectionCells, sections, tickable, ticked } from './stitch';
+import {
+  currentSection, describeDistance, measureClick, measureMove, measureRelease, sectionCells, sections, tickable, ticked,
+} from './stitch';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
 import {
@@ -18,7 +20,8 @@ type Drag =
   | { mode: 'shape' }
   | { mode: 'move'; sx: number; sy: number; fx: number; fy: number }
   | { mode: 'select'; x0: number; y0: number; moved: boolean }
-  | { mode: 'done'; value: number; lx: number; ly: number };
+  | { mode: 'done'; value: number; lx: number; ly: number }
+  | { mode: 'measure' };
 
 interface Preview { kind: 'line' | 'rect' | 'ellipse' | 'backstitch'; x0: number; y0: number; x1: number; y1: number; filled: boolean }
 
@@ -266,6 +269,40 @@ export function CanvasView() {
         ctx.lineWidth = 2; ctx.strokeStyle = '#e11d74'; ctx.stroke(edge);
       }
 
+      const m = S.stitchMode && S.measuring ? S.measure : null;
+      if (m && inside(m.a.x, m.a.y) && inside(m.b.x, m.b.y)) {
+        // The measurement: both squares ringed, and an L-shaped path between them, across then down,
+        // labelled with how many squares each way.
+        const { a, b } = m, dx = b.x - a.x, dy = b.y - a.y;
+        const cx = (x: number) => (x + 0.5) * scale, cy = (y: number) => (y + 0.5) * scale;
+        const ring = (q: { x: number; y: number }) => {
+          ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.strokeRect(q.x * scale, q.y * scale, scale, scale);
+          ctx.lineWidth = 2; ctx.strokeStyle = '#0a84ff'; ctx.strokeRect(q.x * scale, q.y * scale, scale, scale);
+        };
+        const path = new Path2D();
+        path.moveTo(cx(a.x), cy(a.y));
+        path.lineTo(cx(b.x), cy(a.y));
+        path.lineTo(cx(b.x), cy(b.y));
+        ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke(path);
+        ctx.lineWidth = 2; ctx.strokeStyle = '#0a84ff'; ctx.setLineDash([6, 4]); ctx.stroke(path); ctx.setLineDash([]);
+        ring(a);
+        ring(b);
+        const label = (text: string, x: number, y: number) => {
+          ctx.font = '600 12px system-ui, sans-serif';
+          const w = ctx.measureText(text).width + 12, h = 20;
+          ctx.fillStyle = '#0a84ff';
+          ctx.beginPath();
+          ctx.roundRect(x - w / 2, y - h / 2, w, h, 5);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(text, x, y + 0.5);
+          ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+        };
+        if (dx) label(`${Math.abs(dx)} ${dx > 0 ? '→' : '←'}`, (cx(a.x) + cx(b.x)) / 2, cy(a.y) - (dy < 0 ? -14 : 14));
+        if (dy) label(`${Math.abs(dy)} ${dy > 0 ? '↓' : '↑'}`, cx(b.x) + (dx < 0 ? -22 : 22), (cy(a.y) + cy(b.y)) / 2);
+      }
+
       const patch = S.patch;
       if (patch && patch.mask.length === p.cells.length) {
         // The selected shape: a light wash over its squares and a two-tone line around its edge.
@@ -345,6 +382,7 @@ export function CanvasView() {
     const tapped = (x: number, y: number) => {
       const p = S.pattern;
       if (!inside(x, y)) return;
+      if (S.stitchMode && S.measuring) return measureClick(x, y);
       const i = y * p.width + x, id = p.cells[i];
       if (!id) return;
       if (S.stitchMode) {
@@ -392,6 +430,13 @@ export function CanvasView() {
         return;
       }
       if (e.button !== 0) return;
+      if (S.stitchMode && S.measuring) {
+        // Measuring: a click sets the start, and the next click (or letting go after a drag) sets the end.
+        if (!inside(c.x, c.y)) return;
+        measureClick(c.x, c.y);
+        drag = { mode: 'measure' };
+        return;
+      }
       if (S.stitchMode) {
         // Stitch mode: tick squares off as stitched (or untick them) instead of editing the pattern.
         if (!inside(c.x, c.y) || !tickable(c.y * p.width + c.x)) return;
@@ -519,6 +564,12 @@ export function CanvasView() {
         what.textContent = 'empty';
         tip.append(what);
       }
+      const m = S.measuring ? S.measure : null;
+      if (m) {
+        const d = document.createElement('em');
+        d.textContent = m.fixed ? describeDistance(m.b.x - m.a.x, m.b.y - m.a.y) : `${describeDistance(x - m.a.x, y - m.a.y)} from the start`;
+        tip.append(d);
+      }
       tip.hidden = false;
       // Beside the pointer, flipping to the other side near the right or bottom edge.
       const r = wrap.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
@@ -542,6 +593,7 @@ export function CanvasView() {
       const c = pos(e), p = S.pattern;
       hover = { x: c.fx, y: c.fy };
       if (status) status.textContent = inside(c.x, c.y) ? `${c.x + 1}, ${c.y + 1}` : '';
+      if (S.stitchMode && S.measuring && e.pointerType !== 'touch' && inside(c.x, c.y)) measureMove(c.x, c.y);
       showTip(e, c.x, c.y);
       if (!drag) return schedule();
       switch (drag.mode) {
@@ -628,6 +680,10 @@ export function CanvasView() {
         emit();
       }
       if (drag?.mode === 'move') emit();
+      if (drag?.mode === 'measure' && hover) {
+        const x = clamp(Math.floor(hover.x), 0, p.width - 1), y = clamp(Math.floor(hover.y), 0, p.height - 1);
+        measureRelease(x, y);
+      }
       if (drag?.mode === 'pan' && drag.tap && !drag.far) tapped(drag.tap.x, drag.tap.y);
       drag = null;
       preview = null;
