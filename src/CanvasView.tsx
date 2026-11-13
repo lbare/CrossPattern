@@ -346,16 +346,20 @@ export function CanvasView() {
     }
 
     /**
-     * The order to stitch the current section in: a numbered arrow along each row, a dotted line for each
-     * move to the next row (orange where the thread should be finished off rather than carried), Start and
-     * End markers, and the row to do next drawn boldly with its way back shown.
+     * The order to stitch the current section in. Only the rows for the length of thread in use (at most a
+     * few) are drawn in full: a numbered arrow for each, the next one bold with its way back, dotted moves
+     * between them, a ✂ where that length runs out, and Start. The rest of the plan is a faint outline,
+     * or drawn in full with "Whole plan" on, with only small ✂ marks for new threads.
      */
     const drawOrder = (scale: number) => {
       const runs = route();
       if (!runs.length) return;
       const p = S.pattern, w = p.width, method = S.orderMethod, now = currentRun();
       const cx = (i: number) => ((i % w) + 0.5) * scale, cy = (i: number) => (((i / w) | 0) + 0.5) * scale;
-      const finished = (k: number) => runs[k].cells.every((i) => p.done?.[i]);
+      const plan = threadPlan();
+      // The rows shown in detail: those the thread in the needle will do, and never more than eight.
+      const all = S.orderAll;
+      const focus = all ? runs.length - 1 : Math.min(plan?.lengths[0]?.endRun ?? runs.length - 1, 7, runs.length - 1);
       const head = (x0: number, y0: number, x1: number, y1: number, size: number) => {
         const a = Math.atan2(y1 - y0, x1 - x0);
         ctx.beginPath();
@@ -366,9 +370,10 @@ export function CanvasView() {
         ctx.fill();
         ctx.stroke();
       };
-      const badge = (text: string, x: number, y: number, fill: string) => {
-        ctx.font = `600 ${Math.round(clamp(scale * 0.42, 10, 13))}px system-ui, sans-serif`;
-        const bw = Math.max(ctx.measureText(text).width + 10, 18), bh = clamp(scale * 0.6, 15, 19);
+      const badge = (text: string, x: number, y: number, fill: string, small = false) => {
+        ctx.font = `600 ${Math.round(clamp(scale * (small ? 0.34 : 0.42), small ? 9 : 10, small ? 11 : 13))}px system-ui, sans-serif`;
+        const bh = clamp(scale * (small ? 0.48 : 0.6), small ? 13 : 15, small ? 16 : 19);
+        const bw = Math.max(ctx.measureText(text).width + (small ? 7 : 10), bh);
         ctx.fillStyle = fill;
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 1.5;
@@ -381,16 +386,27 @@ export function CanvasView() {
         ctx.fillText(text, x, y + 0.5);
         ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
       };
-      const INK = '#1b1b1f', NOW = '#7c3aed', JUMP = '#f97316', START = '#16a34a';
-
-      // Moves between rows, underneath everything else.
+      const INK = '#1b1b1f', NOW = '#7c3aed', JUMP = '#f97316', START = '#16a34a', CUT = '#0e7490';
       ctx.lineCap = 'round';
+
+      // The rest of the plan, beyond the rows in focus: a faint line along each row, nothing more.
+      if (!all && focus < runs.length - 1) {
+        ctx.globalAlpha = 0.35;
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = Math.max(1, scale * 0.05);
+        for (let k = focus + 1; k < runs.length; k++) {
+          const a = runs[k].cells[0], b = runs[k].cells[runs[k].cells.length - 1];
+          ctx.beginPath(); ctx.moveTo(cx(a), cy(a)); ctx.lineTo(cx(b) + 0.01, cy(b)); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Moves between the rows in focus.
       const passed = new Set<number>();
-      for (let k = 0; k + 1 < runs.length; k++) {
+      for (let k = 0; k < focus; k++) {
         for (const i of runs[k].cells) passed.add(i);
         const from = threadAfter(runs[k], method), to = runs[k + 1].cells[0];
         const { kind } = moveBetween(from, to, passed), jump = kind === 'jump';
-        ctx.globalAlpha = finished(k + 1) ? 0.3 : 1;
         ctx.setLineDash([Math.max(2, scale * 0.15), Math.max(3, scale * 0.2)]);
         ctx.lineWidth = Math.max(1.5, scale * 0.08);
         ctx.strokeStyle = jump ? JUMP : 'rgba(27,27,31,0.7)';
@@ -402,17 +418,12 @@ export function CanvasView() {
         ctx.lineTo(cx(to), cy(to));
         ctx.stroke();
         ctx.setLineDash([]);
-        if (jump && scale >= 10) {
-          const mx = (cx(from) + cx(to)) / 2, my = (cy(from) + cy(to)) / 2;
-          badge('✂ new thread', mx, my, JUMP);
-        }
+        if (jump && scale >= 10) badge('✂', (cx(from) + cx(to)) / 2, (cy(from) + cy(to)) / 2, JUMP, true);
       }
-      ctx.globalAlpha = 1;
 
-      // Each row: an arrow from its first stitch to its last.
-      runs.forEach((run, k) => {
-        const a = run.cells[0], b = run.cells[run.cells.length - 1], isNow = k === now;
-        ctx.globalAlpha = finished(k) ? 0.3 : 1;
+      // Each row in focus: an arrow from its first stitch to its last, numbered when there is room.
+      for (let k = 0; k <= focus; k++) {
+        const run = runs[k], a = run.cells[0], b = run.cells[run.cells.length - 1], isNow = k === now;
         const lw = isNow ? Math.max(3, scale * 0.16) : Math.max(1.5, scale * 0.09);
         const size = isNow ? clamp(scale * 0.5, 7, 16) : clamp(scale * 0.38, 5, 12);
         const color = isNow ? NOW : INK;
@@ -440,49 +451,49 @@ export function CanvasView() {
             head(cx(b) + px, cy(b) + py, cx(a) + px - ux * scale * 0.3, cy(a) + py - uy * scale * 0.3, size * 0.75);
           }
         }
-        if (scale >= 14 || isNow) {
+        // Numbers only where they will not crowd: the next row always, others when zoomed in.
+        if (isNow || (scale >= 16 && (!all || k % 5 === 4))) {
           const bx = cx(a) - (run.vertical ? 0 : scale * 0.5), by = cy(a) - (run.vertical ? scale * 0.5 : 0);
-          badge(String(k + 1), bx, by, isNow ? NOW : INK);
+          badge(String(k + 1), bx, by, isNow ? NOW : INK, !isNow);
         }
-      });
-      ctx.globalAlpha = 1;
+      }
 
-      // Where to begin and where the section ends.
-      const first = runs[0].cells[0], last = threadAfter(runs[runs.length - 1], method);
+      // Where lengths of thread run out: the next change labelled, any further ones (whole plan) as a small ✂.
+      if (plan && plan.lengths.length > 1 && scale >= 8) {
+        plan.lengths.slice(0, -1).forEach((l, n) => {
+          const run = runs[l.endRun];
+          if (!run || l.endRun > focus) return;
+          // A row worked there and back finishes where it began, so that is where the thread runs out.
+          const whole = l.endStitch === run.cells.length - 1, i = whole ? threadAfter(run, method) : run.cells[l.endStitch];
+          if (n === 0) badge('✂ change thread', cx(i), cy(i) + scale * 0.5 + 9, CUT);
+          else badge('✂', cx(i), cy(i) + scale * 0.5 + 8, CUT, true);
+        });
+      }
+
+      // Where to begin; and, once the end is in view, where the section ends and where to go after it.
+      const first = runs[0].cells[0];
       ctx.lineWidth = 3; ctx.strokeStyle = '#fff';
       ctx.strokeRect(((first % w)) * scale + 1, ((first / w) | 0) * scale + 1, scale - 2, scale - 2);
       ctx.lineWidth = 2; ctx.strokeStyle = START;
       ctx.strokeRect(((first % w)) * scale + 1, ((first / w) | 0) * scale + 1, scale - 2, scale - 2);
-      if (scale >= 8) {
-        badge('Start', cx(first), cy(first) - scale * 0.5 - 12, START);
-        if ((runs.length > 1 || runs[0].cells.length > 1) && last !== first) badge('End', cx(last) + scale * 0.5, cy(last) - scale * 0.5 - 10, INK);
-      }
-      // Where one length of thread runs out and the next begins.
-      const plan = threadPlan();
-      if (plan && plan.lengths.length > 1 && scale >= 8) {
-        plan.lengths.slice(0, -1).forEach((l, n) => {
-          const run = runs[l.endRun];
-          if (!run) return;
-          // A row worked there and back finishes where it began, so that is where the thread runs out.
-          const whole = l.endStitch === run.cells.length - 1, i = whole ? threadAfter(run, method) : run.cells[l.endStitch];
-          badge(`✂ thread ${n + 2}`, cx(i), cy(i) + scale * 0.5 + 9, '#0e7490');
-        });
-      }
-
-      // Where to go after this section: a line to the nearest square of the suggested next one.
-      const tip = suggestSection();
-      if (tip && tip.from >= 0) {
-        const NEXT = tip.kind === 'jump' ? JUMP : '#0d9488';
-        ctx.setLineDash([Math.max(4, scale * 0.3), Math.max(3, scale * 0.2)]);
-        ctx.lineWidth = Math.max(2, scale * 0.09);
-        ctx.strokeStyle = NEXT;
-        ctx.beginPath(); ctx.moveTo(cx(tip.from), cy(tip.from)); ctx.lineTo(cx(tip.to), cy(tip.to)); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.lineWidth = 3; ctx.strokeStyle = '#fff';
-        ctx.strokeRect((tip.to % w) * scale + 1, ((tip.to / w) | 0) * scale + 1, scale - 2, scale - 2);
-        ctx.lineWidth = 2; ctx.strokeStyle = NEXT;
-        ctx.strokeRect((tip.to % w) * scale + 1, ((tip.to / w) | 0) * scale + 1, scale - 2, scale - 2);
-        if (scale >= 8) badge(`Next: section ${tip.k + 1}${tip.kind === 'jump' ? ' ✂' : ''}`, cx(tip.to), cy(tip.to) + scale * 0.5 + 11, NEXT);
+      if (scale >= 8) badge('Start', cx(first), cy(first) - scale * 0.5 - 12, START);
+      if (focus === runs.length - 1) {
+        const last = threadAfter(runs[runs.length - 1], method);
+        if (scale >= 8 && last !== first) badge('End', cx(last) + scale * 0.5, cy(last) - scale * 0.5 - 10, INK, true);
+        const tip = suggestSection();
+        if (tip && tip.from >= 0) {
+          const NEXT = tip.kind === 'jump' ? JUMP : '#0d9488';
+          ctx.setLineDash([Math.max(4, scale * 0.3), Math.max(3, scale * 0.2)]);
+          ctx.lineWidth = Math.max(2, scale * 0.09);
+          ctx.strokeStyle = NEXT;
+          ctx.beginPath(); ctx.moveTo(cx(tip.from), cy(tip.from)); ctx.lineTo(cx(tip.to), cy(tip.to)); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.lineWidth = 3; ctx.strokeStyle = '#fff';
+          ctx.strokeRect((tip.to % w) * scale + 1, ((tip.to / w) | 0) * scale + 1, scale - 2, scale - 2);
+          ctx.lineWidth = 2; ctx.strokeStyle = NEXT;
+          ctx.strokeRect((tip.to % w) * scale + 1, ((tip.to / w) | 0) * scale + 1, scale - 2, scale - 2);
+          if (scale >= 8) badge(`Section ${tip.k + 1} next`, cx(tip.to), cy(tip.to) + scale * 0.5 + 10, NEXT, true);
+        }
       }
       ctx.lineCap = 'butt';
     };

@@ -162,7 +162,8 @@ on from the last one you ticked, so stitches done out of order are planned aroun
 lengths, how long each, and where to change thread (at a row's end where possible), so you do not run out partway
 along a row and the last length is cut just long enough. ✂ marks on the stitching-order arrows show the changes, and
 it also gives what is left of the color in skeins. Fabric count, strands, longest length and cm/inches are set in the
-box. The estimate is about 13 mm a stitch on 14-count plus about 10 cm a length to start and finish off.
+box. To keep the pattern uncluttered, only the rows for the thread in your needle are drawn in full; "Whole plan" shows
+every row. The estimate is about 13 mm a stitch on 14-count plus about 10 cm a length to start and finish off.
 
 **Up next** suggests what to do after the current section, with the reason:
 - **The next section**: the nearest unfinished one to where your thread will be, not the next by number, and

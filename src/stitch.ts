@@ -213,6 +213,7 @@ function enterStitch(): void {
     const o = JSON.parse(localStorage.getItem('crosspattern.order') ?? '{}');
     S.orderGuide = !!o.on;
     S.orderMethod = o.method === 'single' ? 'single' : 'rows';
+    S.orderAll = !!o.all;
   } catch { /* none */ }
   const prog = progress();
   const color = saved.color && prog.has(saved.color) ? saved.color : suggestColor(0)?.id || S.pattern.palette.find((c) => prog.has(c.id))?.id || 0;
@@ -350,11 +351,17 @@ export function measureToSection(): boolean {
 // ---- The order to stitch a section in -------------------------------------
 
 function saveOrder(): void {
-  try { localStorage.setItem('crosspattern.order', JSON.stringify({ on: S.orderGuide, method: S.orderMethod })); } catch { /* blocked */ }
+  try { localStorage.setItem('crosspattern.order', JSON.stringify({ on: S.orderGuide, method: S.orderMethod, all: S.orderAll })); } catch { /* blocked */ }
 }
 
 export function setOrderGuide(on: boolean): void {
   S.orderGuide = on;
+  saveOrder();
+  emit(false);
+}
+
+export function setOrderAll(on: boolean): void {
+  S.orderAll = on;
   saveOrder();
   emit(false);
 }

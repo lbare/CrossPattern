@@ -70,6 +70,8 @@ export const S = {
   /** On the stitch screen: arrows showing the order to stitch the current section in, and how it is worked. */
   orderGuide: false,
   orderMethod: 'rows' as 'rows' | 'single',
+  /** Draw the whole plan in full, rather than only the rows for the thread in use. */
+  orderAll: false,
   /** For estimating thread: fabric count, the longest length to cut (mm), strands used, and how to show lengths. */
   thread: { count: 14, maxLength: 450, strands: 2, unit: 'cm' as 'cm' | 'in' },
   measure: null as { a: { x: number; y: number }; b: { x: number; y: number }; fixed: boolean } | null,

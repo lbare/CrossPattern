@@ -4,7 +4,7 @@ import { inkFor } from './color';
 import { PaletteColor } from './model';
 import {
   canKeepAwake, closeStitch, currentRun, currentSection, describeDistance, describeRun, focusColor, measureToSection, route, runDone,
-  setMeasuring, setOrderGuide, setOrderMethod, suggestColor, suggestSection, colorThread, setThread, showLength, threadPlan, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
+  setMeasuring, setOrderAll, setOrderGuide, setOrderMethod, suggestColor, suggestSection, colorThread, setThread, showLength, threadPlan, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
   progress, sections, sessionStart, setOnlyFocus, setSectionDone, setStitchSymbols, stepSection, undoFloor,
 } from './stitch';
 import { S, fitView, openDialog, redo, undo, useStore, zoomBy } from './store';
@@ -55,8 +55,11 @@ export function StitchScreen() {
   };
   const t = S.thread, mineThread = color ? colorThread(color.id) : null;
   const threadCard = plan && (
-    <div className="thread-card">
-      <div className="line"><b>Thread for this section</b><span className="muted">{showLength(plan.total)}</span></div>
+    <details className="thread-card">
+      <summary>
+        <b>Thread</b>
+        <span className="muted"> · {showLength(plan.total)} for this section · {plan.lengths.length} length{plan.lengths.length === 1 ? '' : 's'}</span>
+      </summary>
       {plan.lengths.length === 1 ? (
         <span>One length of <b>{showLength(plan.lengths[0].mm)}</b> is enough, with enough left to finish off.</span>
       ) : (
@@ -92,7 +95,7 @@ export function StitchScreen() {
           <option value="in">inches</option>
         </select>
       </div>
-    </div>
+    </details>
   );
   const upNext = (secTip || (colTip && colTipColor)) && (
     <div className="upnext">
@@ -107,7 +110,7 @@ export function StitchScreen() {
             <button className="btn small" onClick={() => { setSheet(null); goSection(secTip.k); }}>Go</button>
           </div>
           <span className={secTip.kind === 'jump' ? 'jump' : 'muted'}>
-            {secTip.from >= 0 ? `${secTip.d} square${secTip.d === 1 ? '' : 's'} from where your thread ${sec && !isFinished(sec) ? 'will finish' : 'is'}. ${secTip.advice}` : 'The closest to what you have stitched.'}
+            {secTip.from >= 0 ? `${secTip.d} square${secTip.d === 1 ? '' : 's'} away. ${secTip.advice}` : 'The closest to what you have stitched.'}
           </span>
         </div>
       )}
@@ -119,10 +122,10 @@ export function StitchScreen() {
             </span>
             <button className="btn small" onClick={() => { setSheet(null); focusColor(colTip.id); }}>Go</button>
           </div>
-          <span className="muted">{colTip.why}</span>
+          <span className="muted why">{colTip.why}</span>
         </div>
       )}
-      {backstitchNote && <span className="muted">{backstitchNote}</span>}
+      {backstitchNote && colorDone && <span className="muted">{backstitchNote}</span>}
     </div>
   );
   const sectionsDone = list.filter(isFinished).length;
@@ -173,12 +176,23 @@ export function StitchScreen() {
       {step && (
         <>
           <span className="step">Next {runs[now].vertical ? 'column' : 'row'}: {step.title}</span>
-          <span className="muted">{step.left} {runs[now].vertical ? 'column' : 'row'}{step.left === 1 ? '' : 's'} left in this section, planned from where you are.</span>
           <span className="muted">{step.how}</span>
           <span className={step.jump ? 'jump' : 'muted'}>{step.then}</span>
-          <button className="btn small primary" onClick={() => runDone(now)} title="Tick every stitch in this row">
-            {runs[now].vertical ? 'Column' : 'Row'} done ✓
-          </button>
+          {plan && (
+            <span className="muted">
+              ✂ {plan.lengths.length === 1
+                ? `One length of ${showLength(plan.lengths[0].mm)} finishes this section.`
+                : `This length (${showLength(plan.lengths[0].mm)}) lasts until ${changeAt(plan.lengths[0])}.`}
+            </span>
+          )}
+          <div className="order-actions">
+            <button className="btn small primary" onClick={() => runDone(now)} title="Tick every stitch in this row">
+              {runs[now].vertical ? 'Column' : 'Row'} done ✓
+            </button>
+            <label className="check" title="Draw every row of the plan, not just the ones for the thread in your needle">
+              <input type="checkbox" checked={S.orderAll} onChange={(e) => setOrderAll(e.target.checked)} /> Whole plan ({step.left} {runs[now].vertical ? 'column' : 'row'}{step.left === 1 ? '' : 's'})
+            </label>
+          </div>
         </>
       )}
     </div>
