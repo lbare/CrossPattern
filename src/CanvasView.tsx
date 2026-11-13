@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { clamp, hexToRgb, inkFor, rgbToHex } from './color';
 import {
-  currentRun, currentSection, describeDistance, measureClick, measureMove, measureRelease, moveBetween, route, sectionCells, suggestSection, sections, tickable, ticked,
+  currentRun, currentSection, describeDistance, measureClick, measureMove, measureRelease, moveBetween, route, sectionCells, suggestSection, threadPlan, sections, tickable, ticked,
 } from './stitch';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, threadAfter, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
@@ -457,6 +457,18 @@ export function CanvasView() {
         badge('Start', cx(first), cy(first) - scale * 0.5 - 12, START);
         if ((runs.length > 1 || runs[0].cells.length > 1) && last !== first) badge('End', cx(last) + scale * 0.5, cy(last) - scale * 0.5 - 10, INK);
       }
+      // Where one length of thread runs out and the next begins.
+      const plan = threadPlan();
+      if (plan && plan.lengths.length > 1 && scale >= 8) {
+        plan.lengths.slice(0, -1).forEach((l, n) => {
+          const run = runs[l.endRun];
+          if (!run) return;
+          // A row worked there and back finishes where it began, so that is where the thread runs out.
+          const whole = l.endStitch === run.cells.length - 1, i = whole ? threadAfter(run, method) : run.cells[l.endStitch];
+          badge(`✂ thread ${n + 2}`, cx(i), cy(i) + scale * 0.5 + 9, '#0e7490');
+        });
+      }
+
       // Where to go after this section: a line to the nearest square of the suggested next one.
       const tip = suggestSection();
       if (tip && tip.from >= 0) {

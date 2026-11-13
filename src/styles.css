@@ -639,3 +639,9 @@ button { touch-action: manipulation; }
   margin-left: 6px; padding: 1px 6px; border-radius: 9px; font-size: 10px; font-weight: 600; font-family: system-ui, sans-serif;
   background: #0d9488; color: #fff; vertical-align: 1px;
 }
+
+/* ---- Stitch screen: thread for the section ---- */
+.thread-card { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.thread-card .line { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+.thread-card .settings { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.thread-card select { height: 24px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; }

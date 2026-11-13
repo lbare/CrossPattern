@@ -702,3 +702,64 @@ export const threadAfter = (run: Run, method: StitchMethod) => (method === 'rows
 /** How far the thread moves between two squares, in squares (a diagonal step counts as one). */
 export const carry = (from: number, to: number, width: number) =>
   Math.max(Math.abs((from % width) - (to % width)), Math.abs(((from / width) | 0) - ((to / width) | 0)));
+
+// ---- How much thread a section takes ------------------------------------
+
+export interface ThreadOptions {
+  /** Fabric count: squares per inch. */
+  count: number;
+  /** The longest length to thread a needle with, in mm (longer tangles and wears). */
+  maxLength: number;
+  method: StitchMethod;
+}
+
+/**
+ * Thread used per full cross, in mm: two diagonals on the front and two short runs on the back, plus
+ * what goes through the fabric and into tension. Matches the usual rule of thumb that a skein (8 m of
+ * six strands) does about 1,800 stitches in two strands on 14-count. Finishing each cross before the
+ * next takes a little more, from the longer way it travels on the back.
+ */
+export const perStitch = (count: number, method: StitchMethod) => (184 / count) * (method === 'single' ? 1.08 : 1);
+
+/** Thread used up by starting a length (anchored under the first stitches) and finishing it off, in mm. */
+export const TIE_OFF = 100;
+
+/** One length of thread to cut: how long, and the row (and stitch in it) where it runs out. */
+export interface ThreadLength { mm: number; endRun: number; endStitch: number }
+
+/**
+ * Plans the thread for some rows, in the order they will be stitched: how much in all, and how to cut
+ * it into lengths no longer than `maxLength`. A length is changed at the end of a row where it can be,
+ * so you are not left finishing off in the middle of one, and always before a move that is too long to
+ * carry. Each length allows for starting and finishing off, and is rounded up to the next 5 cm.
+ */
+export function planThread(runs: Run[], width: number, o: ThreadOptions): { total: number; lengths: ThreadLength[] } {
+  const per = perStitch(o.count, o.method), cell = 25.4 / o.count, usable = Math.max(per * 2, o.maxLength - TIE_OFF);
+  const lengths: ThreadLength[] = [];
+  let used = 0, total = 0, last: { run: number; stitch: number } | null = null;
+  const close = () => {
+    if (!last) return;
+    lengths.push({ mm: Math.min(o.maxLength, Math.ceil((used + TIE_OFF) / 50) * 50), endRun: last.run, endStitch: last.stitch });
+    total += used + TIE_OFF;
+    used = 0;
+    last = null;
+  };
+  runs.forEach((run, k) => {
+    let move = 0;
+    if (k > 0) {
+      const d = carry(threadAfter(runs[k - 1], o.method), run.cells[0], width);
+      if (d > MAX_CARRY) close(); else move = Math.max(0, d - 1) * cell;
+    }
+    const need = move + run.cells.length * per;
+    // Change thread at this row's start if it will not fit, as long as the thread so far is mostly used.
+    if (last && used + need > usable && used > usable * 0.5) { close(); move = 0; }
+    used += move;
+    for (let j = 0; j < run.cells.length; j++) {
+      if (last && used + per > usable) close();
+      used += per;
+      last = { run: k, stitch: j };
+    }
+  });
+  close();
+  return { total: Math.round(total), lengths };
+}

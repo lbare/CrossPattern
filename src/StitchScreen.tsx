@@ -4,7 +4,7 @@ import { inkFor } from './color';
 import { PaletteColor } from './model';
 import {
   canKeepAwake, closeStitch, currentRun, currentSection, describeDistance, describeRun, focusColor, measureToSection, route, runDone,
-  setMeasuring, setOrderGuide, setOrderMethod, suggestColor, suggestSection, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
+  setMeasuring, setOrderGuide, setOrderMethod, suggestColor, suggestSection, colorThread, setThread, showLength, threadPlan, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
   progress, sections, sessionStart, setOnlyFocus, setSectionDone, setStitchSymbols, stepSection, undoFloor,
 } from './stitch';
 import { S, fitView, openDialog, redo, undo, useStore, zoomBy } from './store';
@@ -43,6 +43,57 @@ export function StitchScreen() {
   const colTip = suggestColor(S.stitchColor);
   const colTipColor = colTip ? p.palette.find((c) => c.id === colTip.id) : undefined;
   const backstitchNote = p.backstitches.length > 0 ? 'Leave the backstitch until every cross stitch is done: it goes on top.' : '';
+  // How much thread what is left of this section takes, and how to cut it.
+  const plan = sec && !isFinished(sec) ? threadPlan() : null;
+  const planRuns = plan ? route() : [];
+  const changeAt = (l: { endRun: number; endStitch: number }) => {
+    const run = planRuns[l.endRun], w = p.width;
+    if (!run) return '';
+    const i = run.cells[l.endStitch], x = (i % w) + 1, y = ((i / w) | 0) + 1;
+    const word = run.vertical ? 'column' : 'row', at = run.vertical ? x : y;
+    return l.endStitch === run.cells.length - 1 ? `the end of ${word} ${at}` : `partway along ${word} ${at} (after ${run.vertical ? `row ${y}` : `column ${x}`})`;
+  };
+  const t = S.thread, mineThread = color ? colorThread(color.id) : null;
+  const threadCard = plan && (
+    <div className="thread-card">
+      <div className="line"><b>Thread for this section</b><span className="muted">{showLength(plan.total)}</span></div>
+      {plan.lengths.length === 1 ? (
+        <span>One length of <b>{showLength(plan.lengths[0].mm)}</b> is enough, with enough left to finish off.</span>
+      ) : (
+        <>
+          <span>
+            Cut <b>{plan.lengths.length} lengths</b>
+            {(() => {
+              const all = plan.lengths, full = all.slice(0, -1), last = all[all.length - 1];
+              if (all.every((l) => l.mm === all[0].mm)) return ` of ${showLength(all[0].mm)}.`;
+              if (full.every((l) => l.mm === full[0].mm)) return `: ${full.length > 1 ? `${full.length} of ` : ''}${showLength(full[0].mm)}, then ${showLength(last.mm)}.`;
+              return `: ${all.map((l) => showLength(l.mm)).join(', ')}.`;
+            })()}
+          </span>
+          <span className="muted">
+            Change thread at {plan.lengths.slice(0, -1).map(changeAt).slice(0, 4).join('; then at ')}
+            {plan.lengths.length > 5 ? ', and so on' : ''}. {S.orderGuide ? 'The ✂ marks on the pattern show where.' : 'Turn on Stitching order to see where on the pattern.'}
+          </span>
+        </>
+      )}
+      {mineThread && <span className="muted">This color: about {showLength(mineThread.mm)} left, {mineThread.skeins < 0.1 ? 'well under a skein' : `${mineThread.skeins.toFixed(1)} skein${mineThread.skeins >= 1.05 ? 's' : ''}`}.</span>}
+      <div className="settings">
+        <select value={t.count} onChange={(e) => setThread({ count: Number(e.target.value) })} title="Fabric count: squares per inch">
+          {[11, 14, 16, 18, 20, 22].map((n) => <option key={n} value={n}>{n}-count</option>)}
+        </select>
+        <select value={t.strands} onChange={(e) => setThread({ strands: Number(e.target.value) })} title="Strands of floss in the needle">
+          {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} strand{n > 1 ? 's' : ''}</option>)}
+        </select>
+        <select value={t.maxLength} onChange={(e) => setThread({ maxLength: Number(e.target.value) })} title="The longest length you like to thread (longer tangles and wears thin)">
+          {[300, 400, 450, 500, 600].map((n) => <option key={n} value={n}>{t.unit === 'in' ? `${Math.round(n / 25.4)} in` : `${n / 10} cm`} max</option>)}
+        </select>
+        <select value={t.unit} onChange={(e) => setThread({ unit: e.target.value as 'cm' | 'in' })} title="Units">
+          <option value="cm">cm</option>
+          <option value="in">inches</option>
+        </select>
+      </div>
+    </div>
+  );
   const upNext = (secTip || (colTip && colTipColor)) && (
     <div className="upnext">
       <b>Up next</b>
@@ -323,6 +374,8 @@ export function StitchScreen() {
 
             {orderCard}
 
+            {threadCard}
+
             {upNext}
 
             {toggles}
@@ -341,6 +394,7 @@ export function StitchScreen() {
             {sheet === 'options' ? (
               <div className="options-sheet">
                 {overall}
+                {threadCard}
                 {upNext}
                 {toggles}
                 <div className="row">

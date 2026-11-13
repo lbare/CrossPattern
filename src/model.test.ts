@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hexToRgb, inkFor, oklabToRgb, rgbToHex, rgbToOklab } from './color';
 import {
-  MAX_CARRY, Pattern, carry, cleanUp, colorSections, stitchRoute, threadAfter, connectedCells, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints, mergeSmallPatches,
+  MAX_CARRY, Pattern, Run, carry, cleanUp, colorSections, perStitch, planThread, stitchRoute, threadAfter, connectedCells, contentBounds, countCells, createPattern, cropped, deserialize, despeckle, edgesOf, floodFill, linePoints, mergeSmallPatches,
   mergeColor, outlineCells, outlineEdges, paletteFromHexes, reduceColors, removeColor, removeUnused, replaceAll,
   resized, serialize, tidyCell,
 } from './model';
@@ -317,5 +317,43 @@ describe('stitching order', () => {
 
   it('handles a single square', () => {
     expect(stitchRoute([7], 5, 'rows')).toEqual([{ cells: [7], vertical: false }]);
+  });
+});
+
+describe('thread estimate', () => {
+  const o = { count: 14, maxLength: 450, method: 'rows' as const };
+  /** Rows of `n` stitches, one under another, starting at the left. */
+  const rowsOf = (rows: number, n: number, w = 40): Run[] =>
+    Array.from({ length: rows }, (_, y) => ({ cells: Array.from({ length: n }, (_, x) => y * w + x), vertical: false }));
+
+  it('uses about 13 mm a stitch on 14-count, less on finer fabric', () => {
+    expect(perStitch(14, 'rows')).toBeCloseTo(13.1, 0);
+    expect(perStitch(18, 'rows')).toBeLessThan(perStitch(14, 'rows'));
+    expect(perStitch(14, 'single')).toBeGreaterThan(perStitch(14, 'rows'));
+  });
+
+  it('a small section needs one length, cut short', () => {
+    const r = planThread(rowsOf(2, 5), 40, o);
+    expect(r.lengths.length).toBe(1);
+    expect(r.lengths[0].mm).toBe(250); // 10 stitches ≈ 131 mm + 100 to start and finish, rounded up
+    expect(r.lengths[0].endRun).toBe(1);
+  });
+
+  it('a long section is split into lengths that end at the end of a row', () => {
+    const r = planThread(rowsOf(10, 10), 40, o); // 100 stitches ≈ 1.3 m
+    expect(r.lengths.length).toBe(5); // two rows (≈ 263 mm) to a 45 cm length
+    expect(r.lengths.slice(0, -1).every((l) => l.mm <= 450 && l.endStitch === 9)).toBe(true);
+    expect(r.total).toBeGreaterThan(1300);
+  });
+
+  it('a row too long for one length is split part way along', () => {
+    const r = planThread(rowsOf(1, 40), 40, o);
+    expect(r.lengths.length).toBeGreaterThan(1);
+    expect(r.lengths[0].endStitch).toBeLessThan(39);
+  });
+
+  it('starts a new length before a move too long to carry', () => {
+    const runs: Run[] = [{ cells: [0, 1], vertical: false }, { cells: [30, 31], vertical: false }];
+    expect(planThread(runs, 40, o).lengths.length).toBe(2);
   });
 });

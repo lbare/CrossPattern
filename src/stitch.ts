@@ -1,5 +1,7 @@
 /** Working through a pattern: one color at a time, one section of that color at a time. */
-import { MAX_CARRY, Run, Section, StitchMethod, carry, colorSections, connectedCells, stitchRoute, threadAfter } from './model';
+import {
+  MAX_CARRY, Run, Section, StitchMethod, ThreadLength, carry, colorSections, connectedCells, perStitch, planThread, stitchRoute, threadAfter,
+} from './model';
 import { S, doneMap, emit, fitView, pushUndo, showRect } from './store';
 
 // ---- Sections of the color being worked ---------------------------------
@@ -206,6 +208,7 @@ function enterStitch(): void {
   let saved: { color?: number; cell?: number; only?: boolean } = {};
   try { saved = JSON.parse(localStorage.getItem('crosspattern.stitch.' + S.projectId) ?? '{}'); } catch { /* none */ }
   S.onlyFocus = saved.only ?? true;
+  try { S.thread = { ...S.thread, ...JSON.parse(localStorage.getItem('crosspattern.thread') ?? '{}') }; } catch { /* none */ }
   try {
     const o = JSON.parse(localStorage.getItem('crosspattern.order') ?? '{}');
     S.orderGuide = !!o.on;
@@ -604,4 +607,47 @@ export function suggestColor(except: number): ColorTip | null {
       ? `${b.touch.toLocaleString()} of its stitches are right beside ones you have finished, so you can count from them.`
       : `It is the closest to what you have stitched, ${b.dist} squares away.`;
   return { id: best, why };
+}
+
+// ---- Thread -----------------------------------------------------------------
+
+export function setThread(patch: Partial<typeof S.thread>): void {
+  S.thread = { ...S.thread, ...patch };
+  try { localStorage.setItem('crosspattern.thread', JSON.stringify(S.thread)); } catch { /* blocked */ }
+  emit(false);
+}
+
+/** A length of thread, written the way the user measures. */
+export function showLength(mm: number): string {
+  if (S.thread.unit === 'in') {
+    const inches = mm / 25.4;
+    return inches >= 36 ? `${(inches / 36).toFixed(1)} yd` : `${Math.round(inches)} in`;
+  }
+  return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.round(mm / 10)} cm`;
+}
+
+let threadCache: { key: string; plan: { total: number; lengths: ThreadLength[] } } | null = null;
+
+/**
+ * The thread for what is left of the current section, following the stitching order: how much, and how
+ * to cut it into lengths, each ending where it runs out. Adapts as stitches are ticked.
+ */
+export function threadPlan(): { total: number; lengths: ThreadLength[] } | null {
+  const runs = route();
+  if (!runs.length) return null;
+  const t = S.thread, key = `${runs.length}:${runs[0].cells[0]}:${runs.reduce((a, r) => a + r.cells.length, 0)}:${S.orderMethod}:${t.count}:${t.maxLength}`;
+  if (threadCache?.key !== key) {
+    threadCache = { key, plan: planThread(runs, S.pattern.width, { count: t.count, maxLength: t.maxLength, method: S.orderMethod }) };
+  }
+  return threadCache.plan;
+}
+
+/** Thread for everything left in a color, and how many skeins that is (8 m of six strands each). */
+export function colorThread(id: number): { mm: number; skeins: number } {
+  const p = S.pattern;
+  let n = 0;
+  for (let i = 0; i < p.cells.length; i++) if (p.cells[i] === id && !p.done?.[i]) n++;
+  // Each stitch, plus a share of starting and finishing off: roughly one length per thirty stitches.
+  const mm = n * perStitch(S.thread.count, S.orderMethod) * 1.1 + Math.ceil(n / 30) * 100;
+  return { mm, skeins: (mm * S.thread.strands) / (6 * 8000) };
 }
