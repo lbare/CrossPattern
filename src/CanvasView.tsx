@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { clamp, hexToRgb, inkFor, rgbToHex } from './color';
 import {
-  currentRun, currentSection, describeDistance, measureClick, measureMove, measureRelease, moveBetween, route, sectionCells, sections, tickable, ticked,
+  currentRun, currentSection, describeDistance, measureClick, measureMove, measureRelease, moveBetween, route, sectionCells, suggestSection, sections, tickable, ticked,
 } from './stitch';
 import { floodFill, linePoints, nextId, nextSymbol, replaceAll, threadAfter, tidyCell } from './model';
 import { FABRIC, buildCellImage, convertedImage, drawOverlay } from './render';
@@ -456,6 +456,21 @@ export function CanvasView() {
       if (scale >= 8) {
         badge('Start', cx(first), cy(first) - scale * 0.5 - 12, START);
         if ((runs.length > 1 || runs[0].cells.length > 1) && last !== first) badge('End', cx(last) + scale * 0.5, cy(last) - scale * 0.5 - 10, INK);
+      }
+      // Where to go after this section: a line to the nearest square of the suggested next one.
+      const tip = suggestSection();
+      if (tip && tip.from >= 0) {
+        const NEXT = tip.kind === 'jump' ? JUMP : '#0d9488';
+        ctx.setLineDash([Math.max(4, scale * 0.3), Math.max(3, scale * 0.2)]);
+        ctx.lineWidth = Math.max(2, scale * 0.09);
+        ctx.strokeStyle = NEXT;
+        ctx.beginPath(); ctx.moveTo(cx(tip.from), cy(tip.from)); ctx.lineTo(cx(tip.to), cy(tip.to)); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 3; ctx.strokeStyle = '#fff';
+        ctx.strokeRect((tip.to % w) * scale + 1, ((tip.to / w) | 0) * scale + 1, scale - 2, scale - 2);
+        ctx.lineWidth = 2; ctx.strokeStyle = NEXT;
+        ctx.strokeRect((tip.to % w) * scale + 1, ((tip.to / w) | 0) * scale + 1, scale - 2, scale - 2);
+        if (scale >= 8) badge(`Next: section ${tip.k + 1}${tip.kind === 'jump' ? ' ✂' : ''}`, cx(tip.to), cy(tip.to) + scale * 0.5 + 11, NEXT);
       }
       ctx.lineCap = 'butt';
     };

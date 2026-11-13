@@ -69,8 +69,13 @@ export function stepSection(delta: number): void {
   goSection(k < 0 ? (delta > 0 ? 0 : -1) : k + delta);
 }
 
-/** Goes to the next section that is not finished. Returns false when the whole color is done. */
+/**
+ * Goes to the next section that is not finished: the one suggested from where the thread is (see
+ * suggestSection), or the next by number. Returns false when the whole color is done.
+ */
 export function nextUnfinished(): boolean {
+  const tip = suggestSection();
+  if (tip) { goSection(tip.k); return true; }
   const { list } = sections(), start = currentSection();
   for (let n = 1; n <= list.length; n++) {
     const k = (Math.max(start, -1) + n) % list.length;
@@ -79,20 +84,23 @@ export function nextUnfinished(): boolean {
   return false;
 }
 
-/** Starts work on a color, at its first unfinished section. */
+/** Starts work on a color, at the section suggested for it (nearest your finished work), or its first unfinished one. */
 export function focusColor(id: number): void {
   S.stitchColor = id;
   S.colorId = id;
   S.highlight = S.onlyFocus ? id : 0;
   S.stitchCell = -1;
   const { list } = sections();
-  const k = list.findIndex((s) => !isFinished(s));
+  const tip = suggestSection();
+  const k = tip ? tip.k : list.findIndex((s) => !isFinished(s));
   if (list.length) goSection(k < 0 ? 0 : k);
   else { outline(); remember(); emit(false); }
 }
 
-/** The next color (in palette order, after the current one) that still has stitches to do, or 0. */
+/** The color to do next (see suggestColor), or 0 when everything is stitched. */
 export function nextColor(): number {
+  const tip = suggestColor(S.stitchColor);
+  if (tip) return tip.id;
   const prog = progress(), pal = S.pattern.palette.filter((c) => prog.has(c.id));
   const at = pal.findIndex((c) => c.id === S.stitchColor);
   for (let n = 1; n <= pal.length; n++) {
@@ -116,6 +124,8 @@ export function setSectionDone(k: number, value: boolean): void {
   pushUndo();
   const done = doneMap();
   for (const i of s.cells) done[i] = value ? 1 : 0;
+  // Worked top to bottom, so the thread ends near the section's last square.
+  if (value) lastStitch = { color: S.stitchColor, at: Math.max(...s.cells) };
   S.stitchCell = s.cells[0];
   emit();
   outline();
@@ -202,7 +212,7 @@ function enterStitch(): void {
     S.orderMethod = o.method === 'single' ? 'single' : 'rows';
   } catch { /* none */ }
   const prog = progress();
-  const color = saved.color && prog.has(saved.color) ? saved.color : nextColor() || S.pattern.palette.find((c) => prog.has(c.id))?.id || 0;
+  const color = saved.color && prog.has(saved.color) ? saved.color : suggestColor(0)?.id || S.pattern.palette.find((c) => prog.has(c.id))?.id || 0;
   S.stitchColor = color;
   S.highlight = S.onlyFocus ? color : 0;
   S.stitchCell = saved.cell !== undefined && S.pattern.cells[saved.cell] === color ? saved.cell : -1;
@@ -364,7 +374,10 @@ const sectionKey = () => {
 /** Remembers where the thread is, so the plan for what is left carries on from there. */
 function threadAt(i: number): void {
   thread = { section: sectionKey(), at: i };
+  lastStitch = { color: S.stitchColor, at: i };
 }
+/** The last stitch made in the color being worked, wherever it was, for choosing the next section. */
+let lastStitch = { color: 0, at: -1 };
 
 /**
  * The current section's rows still to stitch, in order. Only squares not yet ticked are planned, so
@@ -438,7 +451,13 @@ export function describeRun(k: number): { title: string; left: number; how: stri
       ? `Work the half stitches ${there}, then come back ${back} crossing each one.`
       : `Finish each cross before the next, working ${there}.`;
   const next = runs[k + 1];
-  if (!next) return { title, left, how, then: 'That is the last of this section.', jump: false };
+  if (!next) {
+    const tip = suggestSection();
+    const then = tip
+      ? `That is the last of this section. Next: section ${tip.k + 1}, ${tip.d} square${tip.d === 1 ? '' : 's'} away. ${tip.advice}`
+      : 'That is the last of this section.';
+    return { title, left, how, then, jump: tip?.kind === 'jump' };
+  }
   const passed = new Set(runs.slice(0, k + 1).flatMap((r) => r.cells));
   const { kind, d } = moveBetween(threadAfter(run, m), next.cells[0], passed);
   const jump = kind === 'jump', next_ = `the next ${word.toLowerCase()}`;
@@ -450,4 +469,139 @@ export function describeRun(k: number): { title: string; left: number; how: stri
         ? `Then step ${run.vertical ? 'across' : 'down'} to ${next_}.`
         : `Then carry the thread ${d} squares to ${next_}.`;
   return { title, left, how, then, jump };
+}
+
+// ---- Which section, and which color, to do next ----------------------------
+
+/** Advice for getting the thread from one place to the next. */
+function adviceFor(kind: 'step' | 'carry' | 'under' | 'jump' | 'none'): string {
+  return kind === 'step' || kind === 'carry'
+    ? 'Carry the thread straight over.'
+    : kind === 'under'
+      ? 'Slip the thread under the finished stitches on the back to get there.'
+      : kind === 'jump'
+        ? 'Too far to carry: finish off and start a new thread there.'
+        : '';
+}
+
+export interface SectionTip {
+  /** The section to do next. */
+  k: number;
+  /** How far it is, in squares, and how to get there. */
+  d: number;
+  kind: 'step' | 'carry' | 'under' | 'jump' | 'none';
+  advice: string;
+  /** From where the thread will be, to the nearest square of that section (-1 when not known). */
+  from: number;
+  to: number;
+}
+
+/**
+ * The section of this color to do after the current one. Stitchers go to the nearest one, so the thread
+ * can often be carried or slipped under finished work instead of being finished off. Distance is measured
+ * from where the thread will be: the end of the current section's plan if it is unfinished, otherwise the
+ * last stitch made in this color. With nothing to go on, it is the section nearest your finished work, or
+ * the middle of the pattern.
+ */
+export function suggestSection(): SectionTip | null {
+  const { list } = sections(), cur = currentSection(), p = S.pattern, w = p.width;
+  const curSec = list[cur];
+  let from = -1, passed: Set<number> | undefined;
+  if (curSec && !isFinished(curSec)) {
+    const runs = route();
+    if (runs.length) from = threadAfter(runs[runs.length - 1], S.orderMethod);
+    passed = new Set(curSec.cells);
+  } else if (lastStitch.color === S.stitchColor && lastStitch.at >= 0) from = lastStitch.at;
+  let best: SectionTip | null = null, bestCost = Infinity;
+  const near = from < 0 ? nearness() : null;
+  list.forEach((sec, k) => {
+    if (k === cur || isFinished(sec)) return;
+    for (const i of sec.cells) {
+      if (p.done?.[i]) continue;
+      let cost: number;
+      if (from >= 0) {
+        // Going back up the fabric costs a little more, as within a section.
+        const up = Math.max(0, ((from / w) | 0) - ((i / w) | 0));
+        cost = carry(from, i, w) + up * 0.5;
+      } else cost = near![i];
+      if (cost < bestCost) { bestCost = cost; best = { k, d: 0, kind: 'none', advice: '', from, to: i }; }
+    }
+  });
+  if (!best) return null;
+  const b: SectionTip = best;
+  if (from >= 0) {
+    const m = moveBetween(from, b.to, passed);
+    b.d = m.d;
+    b.kind = m.kind;
+  } else b.d = Math.round(bestCost);
+  b.advice = adviceFor(b.kind);
+  return b;
+}
+
+let nearCache: { key: number; map: Uint16Array; anyDone: boolean } | null = null;
+
+/**
+ * How far every square is from the stitches already done (counting diagonal steps as one), or from the
+ * middle of the pattern when nothing is done yet.
+ */
+function nearnessMap(): { map: Uint16Array; anyDone: boolean } {
+  if (nearCache?.key === S.cellsVersion) return nearCache;
+  const p = S.pattern, w = p.width, h = p.height, n = w * h, map = new Uint16Array(n).fill(65535), q = new Int32Array(n);
+  let qt = 0;
+  for (let i = 0; i < n; i++) if (p.done?.[i] && p.cells[i]) { map[i] = 0; q[qt++] = i; }
+  const anyDone = qt > 0;
+  if (!anyDone) {
+    // Nothing stitched yet: measure from the middle.
+    const cx = (w - 1) / 2, cy = (h - 1) / 2;
+    for (let i = 0; i < n; i++) map[i] = Math.round(Math.max(Math.abs((i % w) - cx), Math.abs(((i / w) | 0) - cy)));
+  } else {
+    for (let qh = 0; qh < qt; qh++) {
+      const i = q[qh], x = i % w, y = (i / w) | 0, d = map[i] + 1;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const j = yy * w + xx;
+        if (map[j] > d) { map[j] = d; q[qt++] = j; }
+      }
+    }
+  }
+  nearCache = { key: S.cellsVersion, map, anyDone };
+  return nearCache;
+}
+const nearness = () => nearnessMap().map;
+
+export interface ColorTip { id: number; why: string }
+
+/**
+ * The color to stitch next (other than `except`). Before anything is stitched, the color nearest the
+ * middle: starting in the middle keeps the design centred on the fabric. After that, the color with the
+ * most stitches right beside finished ones, so you can count from finished work, then the one closest
+ * to it, then the one with the most left to do.
+ */
+export function suggestColor(except: number): ColorTip | null {
+  const p = S.pattern, { map, anyDone } = nearnessMap(), prog = progress();
+  const stats = new Map<number, { touch: number; dist: number; left: number }>();
+  for (let i = 0; i < p.cells.length; i++) {
+    const v = p.cells[i];
+    if (!v || v === except || p.done?.[i]) continue;
+    let st = stats.get(v);
+    if (!st) stats.set(v, (st = { touch: 0, dist: 65535, left: 0 }));
+    st.left++;
+    if (map[i] < st.dist) st.dist = map[i];
+    if (anyDone && map[i] === 1) st.touch++;
+  }
+  let best = 0, b: { touch: number; dist: number; left: number } | null = null;
+  for (const [id, st] of stats) {
+    if (!prog.has(id)) continue;
+    const better = !b
+      || (anyDone && st.touch !== b.touch ? st.touch > b.touch : st.dist !== b.dist ? st.dist < b.dist : st.left > b.left);
+    if (better) { best = id; b = st; }
+  }
+  if (!b) return null;
+  const why = !anyDone
+    ? 'It is in the middle of the design. Starting in the middle keeps the design centred on your fabric.'
+    : b.touch
+      ? `${b.touch.toLocaleString()} of its stitches are right beside ones you have finished, so you can count from them.`
+      : `It is the closest to what you have stitched, ${b.dist} squares away.`;
+  return { id: best, why };
 }

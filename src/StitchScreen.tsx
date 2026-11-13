@@ -4,7 +4,7 @@ import { inkFor } from './color';
 import { PaletteColor } from './model';
 import {
   canKeepAwake, closeStitch, currentRun, currentSection, describeDistance, describeRun, focusColor, measureToSection, route, runDone,
-  setMeasuring, setOrderGuide, setOrderMethod, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
+  setMeasuring, setOrderGuide, setOrderMethod, suggestColor, suggestSection, goSection, isFinished, keepAwake, nextColor, nextUnfinished,
   progress, sections, sessionStart, setOnlyFocus, setSectionDone, setStitchSymbols, stepSection, undoFloor,
 } from './stitch';
 import { S, fitView, openDialog, redo, undo, useStore, zoomBy } from './store';
@@ -38,6 +38,42 @@ export function StitchScreen() {
   const colors = p.palette.filter((c) => prog.has(c.id));
   const colorDone = mine.total > 0 && mine.done >= mine.total;
   const following = colorDone ? nextColor() : 0;
+  // What to do next: the nearest section of this color, and the color to move on to after it.
+  const secTip = !colorDone ? suggestSection() : null;
+  const colTip = suggestColor(S.stitchColor);
+  const colTipColor = colTip ? p.palette.find((c) => c.id === colTip.id) : undefined;
+  const backstitchNote = p.backstitches.length > 0 ? 'Leave the backstitch until every cross stitch is done: it goes on top.' : '';
+  const upNext = (secTip || (colTip && colTipColor)) && (
+    <div className="upnext">
+      <b>Up next</b>
+      {secTip && (
+        <div className="tip">
+          <div className="line">
+            <span className="grow">
+              {sec && !isFinished(sec) ? 'After this section: ' : ''}<b>Section {secTip.k + 1}</b>
+              <span className="muted"> · column {list[secTip.k].x + 1}, row {list[secTip.k].y + 1}</span>
+            </span>
+            <button className="btn small" onClick={() => { setSheet(null); goSection(secTip.k); }}>Go</button>
+          </div>
+          <span className={secTip.kind === 'jump' ? 'jump' : 'muted'}>
+            {secTip.from >= 0 ? `${secTip.d} square${secTip.d === 1 ? '' : 's'} from where your thread ${sec && !isFinished(sec) ? 'will finish' : 'is'}. ${secTip.advice}` : 'The closest to what you have stitched.'}
+          </span>
+        </div>
+      )}
+      {colTip && colTipColor && (
+        <div className="tip">
+          <div className="line">
+            <span className="grow">
+              {colorDone ? 'Next color: ' : 'Then the next color: '}<Chip c={colTipColor} /> <b>{colTipColor.hex.toUpperCase()}</b>
+            </span>
+            <button className="btn small" onClick={() => { setSheet(null); focusColor(colTip.id); }}>Go</button>
+          </div>
+          <span className="muted">{colTip.why}</span>
+        </div>
+      )}
+      {backstitchNote && <span className="muted">{backstitchNote}</span>}
+    </div>
+  );
   const sectionsDone = list.filter(isFinished).length;
 
   // On a phone the lists open as a sheet over the pattern; on a computer they are always showing.
@@ -157,7 +193,7 @@ export function StitchScreen() {
             <button onClick={() => pickColor(c.id)}>
               <Chip c={c} />
               <span className="what">
-                <span className="code">{c.hex.toUpperCase()}</span>
+                <span className="code">{c.hex.toUpperCase()}{colTip?.id === c.id && <span className="tip-badge">Suggested next</span>}</span>
                 <Bar done={e.done} total={e.total} />
               </span>
               <span className="nums">{finished ? '✓ done' : `${e.done.toLocaleString()} / ${e.total.toLocaleString()}`}</span>
@@ -175,7 +211,7 @@ export function StitchScreen() {
           <button onClick={() => pickSection(n)}>
             <span className="num">{n + 1}</span>
             <span className="what">
-              <span>Column {s.x + 1}, row {s.y + 1}</span>
+              <span>Column {s.x + 1}, row {s.y + 1}{secTip?.k === n && <span className="tip-badge">Next</span>}</span>
               <Bar done={s.done} total={s.cells.length} />
             </span>
             <span className="nums">{isFinished(s) ? '✓ done' : `${s.done} / ${s.cells.length}`}</span>
@@ -246,7 +282,7 @@ export function StitchScreen() {
                 {following ? (
                   <button className="btn primary" onClick={() => focusColor(following)}>Next color →</button>
                 ) : (
-                  <span className="celebrate">The whole pattern is stitched!</span>
+                  <span className="celebrate">{backstitchNote ? 'Every cross stitch is done! Now the backstitch.' : 'The whole pattern is stitched!'}</span>
                 )}
               </div>
             ) : (
@@ -287,6 +323,8 @@ export function StitchScreen() {
 
             {orderCard}
 
+            {upNext}
+
             {toggles}
 
             <div className="tabs">
@@ -303,6 +341,7 @@ export function StitchScreen() {
             {sheet === 'options' ? (
               <div className="options-sheet">
                 {overall}
+                {upNext}
                 {toggles}
                 <div className="row">
                   <button className={'btn' + (S.measuring ? ' on' : '')} onClick={() => { setMeasuring(!S.measuring); setSheet(null); }}>Measure</button>

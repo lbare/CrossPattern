@@ -158,6 +158,15 @@ on from the last one you ticked, so stitches done out of order are planned aroun
 
 ![Stitching order: numbered rows from the top, with Start, End and the next row in purple](docs/stitch-order.png)
 
+**Up next** suggests what to do after the current section, with the reason:
+- **The next section**: the nearest unfinished one to where your thread will be, not the next by number, and
+  whether to carry the thread over, slip it under finished stitches on the back, or start a new thread.
+- **The next color**: with nothing stitched, the one in the middle of the design (so it is centred on the fabric);
+  after that, the one with the most stitches right beside finished ones, so you can count from them.
+- **Backstitch last**, on top of the finished crosses.
+
+Section done, Next color and picking a color all follow these suggestions, and the Sections and Colors lists mark them.
+
 **Measure** (M, or the ⋯ menu on a phone) counts the squares between two points: click where to measure from and
 where to measure to, or drag between them, and it shows a path with the answer, such as "12 right, 6 down". When
 starting a new section, "How far is it from my stitches?" measures from the nearest stitch you have already done to
